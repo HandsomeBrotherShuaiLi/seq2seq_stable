@@ -3,7 +3,10 @@ from collections import defaultdict
 from keras.layers import Input,LSTM,GRU,Bidirectional
 import json
 class Data(object):
-    def __init__(self,train_data_path,valid_data_path,batch_size,concept_data_path=None,
+    def __init__(self,train_data_path='../Data/train_3.txt',
+                 valid_data_path='../Data/valid_3.txt',
+                 batch_size=64,concept_data_path=None,
+                 dict_path='../Data/all_dict.json',
                  max_len=250,max_sen=11):
         """
         输出 batch_size*
@@ -14,56 +17,33 @@ class Data(object):
         self.train_data_path=train_data_path
         self.valid_data_path=valid_data_path
         self.batch_size=batch_size
+        self.dict_path=dict_path
         self.cocept_data_path=concept_data_path
-        train_data=open(self.train_data_path,encoding='utf-8').readlines()
-        valid_data=open(self.valid_data_path,encoding='utf-8').readlines()
+        self.train_data=open(self.train_data_path,encoding='utf-8').readlines()
+        self.valid_data=open(self.valid_data_path,encoding='utf-8').readlines()
         self.concept_data=json.load(open(self.cocept_data_path,'r')) if concept_data_path!=None else None
         self.max_len=max_len
         self.max_sen=max_sen
-        self.dict=set()
-        train_data_=[]
-        valid_data_=[]
-        for i in train_data:
-            temp=i.split('\t')
-            word_len=[len(s.split(' ')) for s in temp[0].split('<eou>')]
-            word_len.append(len(temp[1].split(' ')))
-            if len(temp)==3 and len(temp[0].split('<eou>'))<=self.max_sen and max(word_len)<=self.max_len:
-                train_data_.append(temp)
-                words=temp[0].split(' ')+temp[1].split(' ')
-                for j in words:
-                    self.dict.add(j)
-                    try:
-                        expand_list=self.concept_data[j].keys()
-                        for t in expand_list:
-                            self.dict.add(t)
-                    except:
-                        pass
-        for i in valid_data:
-            temp=i.split('\t')
-            word_len = [len(s.split(' ')) for s in temp[0].split('<eou>')]
-            word_len.append(len(temp[1].split(' ')))
-            if len(temp)==3 and len(temp[0].split('<eou>'))<=self.max_sen and max(word_len)<=self.max_len:
-                valid_data_.append(temp)
-                words=temp[0].split(' ')+temp[1].split(' ')
-                for j in words:
-                    self.dict.add(j)
-                    try:
-                        expand_list = self.concept_data[j].keys()
-                        for t in expand_list:
-                            self.dict.add(t)
-                    except:
-                        pass
+        self.dict=json.load(open(self.dict_path,'r',encoding='utf-8'))
+        self.dict['<pad>']=len(self.dict.keys())
+        self.train_index=np.array(range(len(self.train_data)))
+        self.valid_index=np.array(range(len(self.valid_data)))
+        np.random.shuffle(self.train_index)
+        np.random.shuffle(self.valid_index)
+        self.steps_per_epoch=len(self.train_data)//self.batch_size
+        self.valid_steps_per_epoch=len(self.valid_data)//self.batch_size
+    def generator(self,is_valid=False,use_concept=False):
+        data=self.train_data if is_valid==False else self.valid_data
+        index=self.valid_index if is_valid else self.train_index
+        if use_concept==False:
+            encoder_input=[]
+            decoder_input=[]
+            count=0
+            while True:
+                for id in index:
 
-        print(len(train_data),len(train_data_))
-        with open('../Data/train_3.csv','w',encoding='utf-8') as f:
-            f.writelines(train_data_)
-        with open('../Data/valid_3.csv','w',encoding='utf-8') as f:
-            f.writelines(valid_data_)
-        dict_index={w:i for i,w in enumerate(self.dict)}
-        with open('../Data/all_dict.json','w',encoding='utf-8') as f:
-            json.dump(f,dict_index)
-    def generator(self,is_valid=False):
-        pass
+        else:
+            pass
 
 class seq2seq(object):
     def __init__(self,max_vocab_len,hidden):
