@@ -26,6 +26,7 @@ class Data(object):
         self.max_sen=max_sen
         self.dict=json.load(open(self.dict_path,'r',encoding='utf-8'))
         self.dict['<pad>']=len(self.dict.keys())
+        self.dict['<eou>'] = len(self.dict.keys())
         self.train_index=np.array(range(len(self.train_data)))
         self.valid_index=np.array(range(len(self.valid_data)))
         np.random.shuffle(self.train_index)
@@ -33,14 +34,43 @@ class Data(object):
         self.steps_per_epoch=len(self.train_data)//self.batch_size
         self.valid_steps_per_epoch=len(self.valid_data)//self.batch_size
     def generator(self,is_valid=False,use_concept=False):
+        print('start generating...')
         data=self.train_data if is_valid==False else self.valid_data
         index=self.valid_index if is_valid else self.train_index
         if use_concept==False:
             encoder_input=[]
             decoder_input=[]
             count=0
+            id=0
             while True:
-                for id in index:
+                if id+self.batch_size<len(data):
+                    print(index[id:id+self.batch_size])
+                    samples=data[index[id:id+self.batch_size]]
+                else:
+                    samples=data[id:]+data[:(id+self.batch_size)%len(data)]
+                utt_all = []
+                for sample in samples:
+                    temp=sample.split('\t')
+                    r=temp[1].split(' ')
+                    response=[self.dict[i] for i in r]
+                    decoder_input.append(response)
+                    utt_lines=temp[0].split('<eou>')
+                    utt_id=[]
+                    for i in range(self.max_sen):
+                        try:
+                            utt_id.append([self.dict[j] for j in utt_lines[i]])
+                        except:
+                            utt_id.append([self.dict['<pad>']])
+                    utt_all.append(utt_id)
+
+                for i in range(self.max_sen):
+                    encoder_input.append(utt_all[j][i] for j in range(self.batch_size))
+                id=(id+self.batch_size)%(len(data))
+                """
+                encoder是固定max_sen行，不定长句子的list
+                """
+                print(len(encoder_input),len(decoder_input))
+                yield encoder_input,decoder_input
 
         else:
             pass
@@ -55,14 +85,12 @@ class seq2seq(object):
         decoder_input=Input(shape=(None,self.max_vocab_len),name='decoder_input')
         decoder_output,_,_=LSTM(self.hidden,return_sequences=True,return_state=True)
 
-
-
-
 if __name__=='__main__':
 
     d=Data(
         train_data_path='/home/next/PycharmProjects/zhoujianyun/ConceptNet/train_2.tsv',
         valid_data_path='/home/next/PycharmProjects/zhoujianyun/ConceptNet/valid_2.tsv',
-        batch_size=8,
+        batch_size=64,
         concept_data_path='/home/next/PycharmProjects/zhoujianyun/ConceptNet/concept_dict.json'
     )
+    d.generator().__next__()
