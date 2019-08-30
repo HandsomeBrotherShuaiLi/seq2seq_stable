@@ -1,6 +1,6 @@
 import numpy as np
 from collections import defaultdict
-from keras.layers import Input,LSTM,GRU,Bidirectional
+from keras.layers import Input,LSTM,GRU,Bidirectional,Lambda
 import json
 class Data(object):
     def __init__(self,train_data_path='../Data/train_3.txt',
@@ -36,18 +36,18 @@ class Data(object):
     def generator(self,is_valid=False,use_concept=False):
         print('start generating...')
         data=self.train_data if is_valid==False else self.valid_data
+        data=np.array(data)
         index=self.valid_index if is_valid else self.train_index
         if use_concept==False:
             encoder_input=[]
             decoder_input=[]
-            count=0
             id=0
             while True:
-                if id+self.batch_size<len(data):
-                    print(index[id:id+self.batch_size])
+                if id+self.batch_size<data.shape[0]:
                     samples=data[index[id:id+self.batch_size]]
                 else:
-                    samples=data[id:]+data[:(id+self.batch_size)%len(data)]
+                    temp_index=index[id:]+index[:(id+self.batch_size)%len(data)]
+                    samples=data[temp_index]
                 utt_all = []
                 for sample in samples:
                     temp=sample.split('\t')
@@ -76,10 +76,12 @@ class Data(object):
             pass
 
 class seq2seq(object):
-    def __init__(self,max_vocab_len,hidden):
-        self.max_vocab_len=max_vocab_len
+    def __init__(self,hidden,max_len=250,max_sen=11):
+        self.max_vocab_len=max_len
+        self.max_sen=max_sen
         self.hidden=hidden
     def build_network(self):
+        layer=Lambda(function=)
         encoder_input=Input(shape=(None,self.max_vocab_len),name='encoder_input')
         encoder_output,state_h,state_c=LSTM(self.hidden,return_state=True)(encoder_input)
         decoder_input=Input(shape=(None,self.max_vocab_len),name='decoder_input')
