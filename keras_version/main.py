@@ -126,7 +126,6 @@ class seq2seq(object):
             every_line_hidden_state.append(K.concatenate(oneline,axis=-1))
         x=K.concatenate(every_line_last_hidden_state,axis=-1)
         print(x.get_shape())
-        #hahahah
 
 
 
@@ -161,3 +160,6 @@ if __name__=='__main__':
             concept_data_path='/home/next/PycharmProjects/zhoujianyun/ConceptNet/concept_dict.json'
         )
         t=d.generator()
+
+
+
