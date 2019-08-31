@@ -84,15 +84,16 @@ class Data(object):
             pass
 
 class seq2seq(object):
-    def __init__(self,hidden,max_vocab_len,max_sentence_len=250,max_sen=11,batch_size=12):
+    def __init__(self,hidden,max_vocab_len,drop_out,max_sentence_len=250,max_sen=11,batch_size=12):
         self.max_vocab_len=max_vocab_len
         self.max_sentence_len=max_sentence_len
+        self.drop_out=drop_out
         self.max_sen=max_sen
         self.hidden=hidden
         self.batch_size=batch_size
     def encoder_input(self,x):
         embedding_layer=Embedding(self.max_vocab_len,self.hidden,input_length=None,batch_size=self.batch_size)
-        lstm_layer=Bidirectional(LSTM(self.hidden,return_sequences=True,return_state=True),merge_mode='sum')
+        lstm_layer=Bidirectional(LSTM(self.hidden,return_sequences=True,return_state=True,dropout=),merge_mode='sum')
         shape=x.get_shape()
         for line in shape[0]:
             line_tensor=x[line,:,:]
