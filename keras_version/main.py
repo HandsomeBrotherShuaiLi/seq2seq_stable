@@ -85,7 +85,7 @@ class Data(object):
                     encoder_input.append(sample)
                 decoder_input=pad_sequences(decoder_input)
                 """
-                encoder是固定max_sen行，不定长句子的list
+                encoder是固定max_sen行，不定长句子的list,hhhh
                 """
                 encoder_input=np.array(encoder_input)
                 decoder_input=np.array(decoder_input)
