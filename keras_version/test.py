@@ -124,3 +124,41 @@ model.summary()
             # model.summary()
             # return model
 
+# train_data=open(train_data_path,'r',encoding='utf-8').readlines()
+#         dict_data=json.load(open(dict_path,'r',encoding='utf-8'))
+#         replace_key = list(dict_data.keys())[0]
+#         dict_data['<pad>'] = 0
+#         dict_data['<eou>'] = len(dict_data.keys())
+#         dict_data[replace_key] = len(dict_data.keys())
+#         num_tokens=len(dict_data.keys())
+#         input_texts=[]
+#         input_len=[]
+#         target_texts=[]
+#         target_len=[]
+#         for sample in train_data:
+#             temp=sample.split('\t')
+#             input=temp[0].split(' ')
+#             input_len.append(len(input))
+#             input_texts.append(input)
+#             target=sample[1].split(' ')
+#             target_len.append(len(target))
+#             target_texts.append(target)
+#         print(len(train_data),max(input_len),num_tokens)
+#
+#         encoder_input_data = np.zeros(
+#             (len(train_data), max(input_len), num_tokens),
+#             dtype='int32')
+#         decoder_input_data = np.zeros(
+#             (len(train_data), max(target_len), num_tokens),
+#             dtype='int32')
+#         decoder_target_data = np.zeros(
+#             (len(train_data),max(target_len), num_tokens),
+#             dtype='int32')
+#         for i,(input_text,target_text) in enumerate(zip(input_texts,target_texts)):
+#             for t, word in enumerate(input_text):
+#                 encoder_input_data[i,t,dict_data[word]]=1.
+#             for t,word in enumerate(target_text):
+#                 decoder_input_data[i,t,dict_data[word]]=1.
+#                 if t>0:
+#                     decoder_target_data[i, t - 1, dict_data[word]] = 1.
+#

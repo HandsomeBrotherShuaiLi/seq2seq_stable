@@ -93,16 +93,68 @@ class Data(object):
                 decoder_input = []
         else:
             pass
+class Data_2(object):
+    def __init__(self,train_data_path,dict_json_path,batch_size,split_ratio):
+        self.train_data=open(train_data_path,'r',encoding='utf-8').readlines()
+        self.dict=json.load(open(dict_json_path,'r',encoding='utf-8'))
+        replace_key = list(self.dict.keys())[0]
+        self.dict['<pad>'] = 0
+        self.dict['<eou>'] = len(self.dict.keys())
+        self.dict[replace_key] = len(self.dict.keys())
+        train_index=np.array(range(len(self.train_data)))
+        valid_num=int(split_ratio*len(self.train_data))
+        self.valid_index=np.random.choice(train_index,size=valid_num,replace=False)
+        self.train_index=np.array([i for i in train_index if i not in self.valid_index])
+        self.steps_per_epoch=len(self.train_index)//batch_size
+        self.valid_steps_per_epoch=len(self.valid_index)//batch_size
+        self.batch_size=batch_size
+        input_len=[]
+        target_len=[]
+        for sample in self.train_data:
+            temp=sample.split('\t')
+            input_len.append(len(temp[0].split(' ')))
+            target_len.append(len(temp[1].split(' ')))
+        self.max_input_len=max(input_len)
+        self.max_target_len=max(target_len)
+        self.max_vocab_len=len(self.dict)
+    def generator(self,is_valid=False,use_concept=False):
+        index=self.train_index if is_valid==False else self.valid_index
+        data=np.array(self.train_data)
+        print('start generating...')
+        if use_concept==False:
+            encoder_input_data = np.zeros(
+                (self.batch_size, self.max_input_len, self.max_vocab_len),
+                dtype='float32')
+            decoder_input_data = np.zeros(
+                (self.batch_size, self.max_target_len, self.max_vocab_len),
+                dtype='float32')
+            decoder_target_data = np.zeros(
+                (self.batch_size, self.max_target_len, self.max_vocab_len),
+                dtype='int32')
+            id = 0
+            while True:
+                if id+self.batch_size<len(index):
+                    samples=data[index[id:id+self.batch_size]]
+                else:
+                    temp_index=index[id:]+index[:(id+self.batch_size)%len(index)]
+                    samples=data[temp_index]
+                for i,sample in enumerate(samples):
+                    temp=sample.split('\t')
+                    input_text=temp[0].split(' ')
+                    target_text=temp[1].split(' ')
+                    for j,word in enumerate(input_text):
+                        encoder_input_data[i,j,self.dict[word]]=1.0
+                    for j,word in enumerate(target_text):
+                        decoder_input_data[i,j,self.dict[word]]=1.0
+                        if j>0:
+                            decoder_target_data[i,j-1,self.dict[word]]=1.0
+                yield {'encoder_input':encoder_input_data,'decoder_input':decoder_input_data,
+                       'decoder_target':decoder_target_data}
+                id = (id + self.batch_size) % (len(index))
 
 class seq2seq(object):
-    def __init__(self,hidden,max_sentence_len=250,max_sen=11,batch_size=8):
-        self.max_sentence_len=max_sentence_len
-        self.max_sen=max_sen
+    def __init__(self,hidden):
         self.hidden=hidden
-        self.batch_size=batch_size
-    def reshape(self,x):
-        return K.reshape(x,shape=(self.batch_size,self.max_sen,self.hidden))
-
     def build_network(self,max_vocab_len,baseline=True,is_training=True):
         """
         :param baseline:
@@ -110,86 +162,46 @@ class seq2seq(object):
         :return:
         """
         if baseline:
-            encoder_inputs = Input(shape=(None, max_vocab_len))
+            encoder_inputs = Input(shape=(None, max_vocab_len),name='encoder_input')
             encoder = LSTM(self.hidden, return_state=True)
             encoder_outputs, state_h, state_c = encoder(encoder_inputs)
             encoder_states = [state_h, state_c]
 
-            decoder_inputs = Input(shape=(None, max_vocab_len))
+            decoder_inputs = Input(shape=(None, max_vocab_len),name='decoder_input')
             decoder_lstm = LSTM(self.hidden, return_sequences=True, return_state=True)
             decoder_outputs, _, _ = decoder_lstm(decoder_inputs,
                                                  initial_state=encoder_states)
-            decoder_dense = Dense(max_vocab_len, activation='softmax')
+            decoder_dense = Dense(max_vocab_len, activation='softmax',name='decoder_target')
             decoder_outputs = decoder_dense(decoder_outputs)
             model = Model([encoder_inputs, decoder_inputs], decoder_outputs) if is_training else Model(encoder_inputs, decoder_outputs)
             model.summary()
             return model
 
-    def train(self,baseline=True,train_data_path='../Data/train_3.txt',
-                 dict_path='../Data/all_dict.json'):
-        train_data=open(train_data_path,'r',encoding='utf-8').readlines()
-        dict_data=json.load(open(dict_path,'r',encoding='utf-8'))
-        replace_key = list(dict_data.keys())[0]
-        dict_data['<pad>'] = 0
-        dict_data['<eou>'] = len(dict_data.keys())
-        dict_data[replace_key] = len(dict_data.keys())
-        num_tokens=len(dict_data.keys())
-        input_texts=[]
-        input_len=[]
-        target_texts=[]
-        target_len=[]
-        for sample in train_data:
-            temp=sample.split('\t')
-            input=temp[0].split(' ')
-            input_len.append(len(input))
-            input_texts.append(input)
-            target=sample[1].split(' ')
-            target_len.append(len(target))
-            target_texts.append(target)
-        print(len(train_data),max(input_len),num_tokens)
-
-        encoder_input_data = np.zeros(
-            (len(train_data), max(input_len), num_tokens),
-            dtype='int32')
-        decoder_input_data = np.zeros(
-            (len(train_data), max(target_len), num_tokens),
-            dtype='int32')
-        decoder_target_data = np.zeros(
-            (len(train_data),max(target_len), num_tokens),
-            dtype='int32')
-        for i,(input_text,target_text) in enumerate(zip(input_texts,target_texts)):
-            for t, word in enumerate(input_text):
-                encoder_input_data[i,t,dict_data[word]]=1.
-            for t,word in enumerate(target_text):
-                decoder_input_data[i,t,dict_data[word]]=1.
-                if t>0:
-                    decoder_target_data[i, t - 1, dict_data[word]] = 1.
-        model=self.build_network(max_vocab_len=len(dict_data.keys()),is_training=True,baseline=baseline)
+    def train(self,batch_size,baseline=True,train_data_path='../Data/train_3.txt',
+                 dict_path='../Data/all_dict.json',split_ratio=0.1):
+        data=Data_2(train_data_path=train_data_path,dict_json_path=dict_path,batch_size=batch_size,
+                    split_ratio=split_ratio)
+        model=self.build_network(max_vocab_len=data.max_vocab_len,is_training=True,baseline=baseline)
         model.compile(
             optimizer=Adam(lr=0.01),
             loss=['categorical_crossentropy']
         )
-        model.fit(x=[encoder_input_data, decoder_input_data],y=decoder_target_data,
-                  batch_size=self.batch_size,
-                  epochs=100,initial_epoch=0,validation_split=0.2,
-                  callbacks=[
-                      TensorBoard('logs')
-                      # ReduceLROnPlateau(),
-                  ])
+        model.fit_generator(
+            generator=data.generator(is_valid=False),
+            steps_per_epoch=data.steps_per_epoch,
+            validation_data=data.generator(is_valid=True),
+            validation_steps=data.valid_steps_per_epoch,
+            epochs=100,
+            initial_epoch=0,
+            callbacks=[
+                TensorBoard('logs'),
+                ReduceLROnPlateau(patience=8,verbose=1,monitor='val_loss'),
+                EarlyStopping(monitor='val_loss',min_delta=1e-4,patience=28,verbose=1),
+                ModelCheckpoint(filepath='models/seq2seq-{epoch:03d}--{val_loss:.5f}--{loss:.5f}.hdf5',
+                                verbose=1,save_best_only=True,save_weights_only=False,period=4)
+            ]
+        )
 
 if __name__=='__main__':
-    computer=2
-    if computer==1:
-        d = Data()
-        t=d.generator()
-        t.__next__()
-        t.__next__()
-        model=seq2seq(hidden=128)
-        model.build_network()
-    else:
-        model = seq2seq(hidden=128,batch_size=16)
-        model.train(baseline=True,train_data_path='../train_3.txt',
-            dict_path='../all_dict.json')
-
-
-
+    app=seq2seq(hidden=256)
+    app.train(batch_size=16)
