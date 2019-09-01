@@ -122,11 +122,11 @@ class Data_2(object):
         self.max_vocab_len=len(self.dict)+1
         print('单词个数为:{}'.format(self.max_vocab_len))
         print(self.max_input_len,self.max_target_len)
-    def generator(self,is_valid=False,use_concept=False):
+    def generator(self,is_valid=False,use_concept=False,union=False):
         index=self.train_index if is_valid==False else self.valid_index
         data=np.array(self.train_data)
         # print('start generating...')
-        if use_concept==False:
+        if use_concept==False and union:
             encoder_input_data = np.zeros(
                 (self.batch_size, self.max_input_len),
                 dtype='float32')
@@ -134,29 +134,49 @@ class Data_2(object):
                 (self.batch_size, self.max_target_len),
                 dtype='float32')
             decoder_target_data = np.zeros(
-                (self.batch_size, self.max_target_len,self.max_vocab_len),
+                (self.batch_size, self.max_target_len, self.max_vocab_len),
                 dtype='float32')
             id = 0
             while True:
-                if id+self.batch_size<len(index):
-                    samples=data[index[id:id+self.batch_size]]
+                if id + self.batch_size < len(index):
+                    samples = data[index[id:id + self.batch_size]]
                 else:
-                    temp_index=index[id:]+index[:(id+self.batch_size)%len(index)]
-                    samples=data[temp_index]
+                    temp_index = index[id:] + index[:(id + self.batch_size) % len(index)]
+                    samples = data[temp_index]
+                for i, sample in enumerate(samples):
+                    temp = sample.split('\t')
+                    input_text = temp[0].split(' ')
+                    target_text = temp[1].split(' ')
+                    for j, word in enumerate(input_text):
+                        encoder_input_data[i, j] = self.dict[word]
+                    for j, word in enumerate(target_text):
+                        decoder_input_data[i, j] = self.dict[word]
+                        if j > 0:
+                            decoder_target_data[i, j - 1, self.dict[word]] = 1.0
+                inputs = {'encoder_input': encoder_input_data, 'decoder_input': decoder_input_data}
+                outputs = {'decoder_target': decoder_target_data}
+                yield (inputs, outputs)
+                id = (id + self.batch_size) % (len(index))
+        elif use_concept==False and union==False:
+            encoder_input_data=[]
+            decoder_input_data=[]
+            decoder_target_data=[]
+            id=0
+            while True:
+                if id + self.batch_size < len(index):
+                    samples = data[index[id:id + self.batch_size]]
+                else:
+                    temp_index = index[id:] + index[:(id + self.batch_size) % len(index)]
+                    samples = data[temp_index]
                 for i,sample in enumerate(samples):
                     temp=sample.split('\t')
-                    input_text=temp[0].split(' ')
-                    target_text=temp[1].split(' ')
-                    for j,word in enumerate(input_text):
-                        encoder_input_data[i,j]=self.dict[word]
-                    for j,word in enumerate(target_text):
-                        decoder_input_data[i,j]=self.dict[word]
-                        if j>0:
-                            decoder_target_data[i,j-1,self.dict[word]]=1.0
-                inputs={'encoder_input':encoder_input_data,'decoder_input':decoder_input_data}
-                outputs={'decoder_target':decoder_target_data}
-                yield (inputs,outputs)
-                id = (id + self.batch_size) % (len(index))
+                    context=temp[0].split('<eou>')
+                    respone=temp[0].split(' ')
+                    response_instance=[0]*len(respone)
+                    for j,word in enumerate(respone):
+                        pass
+
+
 
 class seq2seq(object):
     def __init__(self,hidden):
