@@ -1,6 +1,6 @@
 import numpy as np
 from collections import defaultdict
-from keras.layers import Input,LSTM,Dense
+from keras.layers import Input,LSTM,Dense,Embedding
 from keras import Model
 from keras.optimizers import Adam,SGD,RMSprop
 from keras.preprocessing.sequence import pad_sequences
@@ -116,21 +116,21 @@ class Data_2(object):
             target_len.append(len(temp[1].split(' ')))
         self.max_input_len=max(input_len)
         self.max_target_len=max(target_len)
-        self.max_vocab_len=len(self.dict)
+        self.max_vocab_len=len(self.dict)+1
     def generator(self,is_valid=False,use_concept=False):
         index=self.train_index if is_valid==False else self.valid_index
         data=np.array(self.train_data)
-        print('start generating...')
+        # print('start generating...')
         if use_concept==False:
             encoder_input_data = np.zeros(
-                (self.batch_size, self.max_input_len, self.max_vocab_len),
+                (self.batch_size, self.max_input_len),
                 dtype='float32')
             decoder_input_data = np.zeros(
-                (self.batch_size, self.max_target_len, self.max_vocab_len),
+                (self.batch_size, self.max_target_len),
                 dtype='float32')
             decoder_target_data = np.zeros(
-                (self.batch_size, self.max_target_len, self.max_vocab_len),
-                dtype='int32')
+                (self.batch_size, self.max_target_len,self.max_vocab_len),
+                dtype='float32')
             id = 0
             while True:
                 if id+self.batch_size<len(index):
@@ -143,13 +143,14 @@ class Data_2(object):
                     input_text=temp[0].split(' ')
                     target_text=temp[1].split(' ')
                     for j,word in enumerate(input_text):
-                        encoder_input_data[i,j,self.dict[word]]=1.0
+                        encoder_input_data[i,j]=self.dict[word]
                     for j,word in enumerate(target_text):
-                        decoder_input_data[i,j,self.dict[word]]=1.0
+                        decoder_input_data[i,j]=self.dict[word]
                         if j>0:
                             decoder_target_data[i,j-1,self.dict[word]]=1.0
-                yield {'encoder_input':encoder_input_data,'decoder_input':decoder_input_data,
-                       'decoder_target':decoder_target_data}
+                inputs={'encoder_input':encoder_input_data,'decoder_input':decoder_input_data}
+                outputs={'decoder_target':decoder_target_data}
+                yield (inputs,outputs)
                 id = (id + self.batch_size) % (len(index))
 
 class seq2seq(object):
@@ -162,23 +163,25 @@ class seq2seq(object):
         :return:
         """
         if baseline:
-            encoder_inputs = Input(shape=(None, max_vocab_len),name='encoder_input')
+            encoder_inputs = Input(shape=(None,),name='encoder_input')
+            shared_embedding_layer=Embedding(max_vocab_len,self.hidden,mask_zero=True)
             encoder = LSTM(self.hidden, return_state=True)
-            encoder_outputs, state_h, state_c = encoder(encoder_inputs)
+            encoder_embed=shared_embedding_layer(encoder_inputs)
+            encoder_outputs, state_h, state_c = encoder(encoder_embed)
             encoder_states = [state_h, state_c]
 
-            decoder_inputs = Input(shape=(None, max_vocab_len),name='decoder_input')
+            decoder_inputs = Input(shape=(None,),name='decoder_input')
             decoder_lstm = LSTM(self.hidden, return_sequences=True, return_state=True)
-            decoder_outputs, _, _ = decoder_lstm(decoder_inputs,
+            decoder_embed=shared_embedding_layer(decoder_inputs)
+            decoder_outputs, _, _ = decoder_lstm(decoder_embed,
                                                  initial_state=encoder_states)
-            decoder_dense = Dense(max_vocab_len, activation='softmax',name='decoder_target')
-            decoder_outputs = decoder_dense(decoder_outputs)
-            model = Model([encoder_inputs, decoder_inputs], decoder_outputs) if is_training else Model(encoder_inputs, decoder_outputs)
+            decoder_softmax = Dense(max_vocab_len, activation='softmax',name='decoder_target')(decoder_outputs)
+            model = Model([encoder_inputs, decoder_inputs], decoder_softmax) if is_training else Model(encoder_inputs, decoder_softmax)
             model.summary()
             return model
 
-    def train(self,batch_size,baseline=True,train_data_path='../Data/train_3.txt',
-                 dict_path='../Data/all_dict.json',split_ratio=0.1):
+    def train(self,batch_size,baseline=True,train_data_path='../data/train_3.txt',
+                 dict_path='../data/all_dict.json',split_ratio=0.1):
         data=Data_2(train_data_path=train_data_path,dict_json_path=dict_path,batch_size=batch_size,
                     split_ratio=split_ratio)
         model=self.build_network(max_vocab_len=data.max_vocab_len,is_training=True,baseline=baseline)
@@ -198,10 +201,10 @@ class seq2seq(object):
                 ReduceLROnPlateau(patience=8,verbose=1,monitor='val_loss'),
                 EarlyStopping(monitor='val_loss',min_delta=1e-4,patience=28,verbose=1),
                 ModelCheckpoint(filepath='models/seq2seq-{epoch:03d}--{val_loss:.5f}--{loss:.5f}.hdf5',
-                                verbose=1,save_best_only=True,save_weights_only=False,period=4)
+                                save_best_only=True,save_weights_only=False,period=4)
             ]
         )
 
 if __name__=='__main__':
     app=seq2seq(hidden=256)
-    app.train(batch_size=16)
+    app.train(batch_size=8)
