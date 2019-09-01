@@ -146,6 +146,7 @@ class seq2seq(object):
             target=sample[1].split(' ')
             target_len.append(len(target))
             target_texts.append(target)
+        print(len(train_data),max(input_len),num_tokens)
 
         encoder_input_data = np.zeros(
             (len(train_data), max(input_len), num_tokens),
@@ -173,6 +174,7 @@ class seq2seq(object):
                   epochs=100,initial_epoch=0,validation_split=0.2,
                   callbacks=[
                       TensorBoard('logs')
+                      # ReduceLROnPlateau(),
                   ])
 
 if __name__=='__main__':
@@ -185,9 +187,9 @@ if __name__=='__main__':
         model=seq2seq(hidden=128)
         model.build_network()
     else:
-        model = seq2seq(hidden=128)
-        model.train(baseline=True,train_data_path='F:\Dialogue_System\zhoujianyun\ConceptNet\\train_3.txt',
-            dict_path='F:\Dialogue_System\zhoujianyun\ConceptNet\\all_dict.json')
+        model = seq2seq(hidden=128,batch_size=16)
+        model.train(baseline=True,train_data_path='../train_3.txt',
+            dict_path='../all_dict.json')
 
 
 
