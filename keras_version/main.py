@@ -94,13 +94,8 @@ class Data(object):
         else:
             pass
 class Data_2(object):
-    def __init__(self,train_data_path,dict_json_path,batch_size,split_ratio):
+    def __init__(self,train_data_path,batch_size,split_ratio):
         self.train_data=open(train_data_path,'r',encoding='utf-8').readlines()
-        self.dict=json.load(open(dict_json_path,'r',encoding='utf-8'))
-        replace_key = list(self.dict.keys())[0]
-        self.dict['<pad>'] = 0
-        self.dict['<eou>'] = len(self.dict.keys())
-        self.dict[replace_key] = len(self.dict.keys())
         train_index=np.array(range(len(self.train_data)))
         valid_num=int(split_ratio*len(self.train_data))
         self.valid_index=np.random.choice(train_index,size=valid_num,replace=False)
@@ -110,13 +105,23 @@ class Data_2(object):
         self.batch_size=batch_size
         input_len=[]
         target_len=[]
+        dict=set()
+        dict.add('<pad>')
+        dict.add('<eou>')
         for sample in self.train_data:
             temp=sample.split('\t')
             input_len.append(len(temp[0].split(' ')))
             target_len.append(len(temp[1].split(' ')))
+            for j in temp[0].split(' '):
+                dict.add(j)
+            for j in temp[1].split(' '):
+                dict.add(j)
+        self.dict={word:i for i,word in enumerate(list(dict))}
         self.max_input_len=max(input_len)
         self.max_target_len=max(target_len)
         self.max_vocab_len=len(self.dict)+1
+        print('单词个数为:{}'.format(self.max_vocab_len))
+        print(self.max_input_len,self.max_target_len)
     def generator(self,is_valid=False,use_concept=False):
         index=self.train_index if is_valid==False else self.valid_index
         data=np.array(self.train_data)
@@ -180,13 +185,12 @@ class seq2seq(object):
             model.summary()
             return model
 
-    def train(self,batch_size,baseline=True,train_data_path='../data/train_3.txt',
-                 dict_path='../data/all_dict.json',split_ratio=0.1):
-        data=Data_2(train_data_path=train_data_path,dict_json_path=dict_path,batch_size=batch_size,
+    def train(self,batch_size,baseline=True,train_data_path='../data/train_3.txt',split_ratio=0.1):
+        data=Data_2(train_data_path=train_data_path,batch_size=batch_size,
                     split_ratio=split_ratio)
         model=self.build_network(max_vocab_len=data.max_vocab_len,is_training=True,baseline=baseline)
         model.compile(
-            optimizer=Adam(lr=0.01),
+            optimizer=RMSprop(lr=0.001),
             loss=['categorical_crossentropy']
         )
         model.fit_generator(
@@ -207,4 +211,4 @@ class seq2seq(object):
 
 if __name__=='__main__':
     app=seq2seq(hidden=256)
-    app.train(batch_size=8)
+    app.train(batch_size=32)
