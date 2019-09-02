@@ -297,5 +297,5 @@ class seq2seq(object):
 if __name__=='__main__':
     #'/diskA/wenqiang/lishuai/seq2seq_stable/data/train_3.txt'
     app=seq2seq(hidden=256)
-    app.train(batch_size=32,baseline=True,union=False,hierarchical=False,
-              train_data_path='/diskA/wenqiang/lishuai/seq2seq_stable/data/train_3.txt')
+    app.train(batch_size=32,baseline=True,union=False,hierarchical=False,split_ratio=0.2,
+              train_data_path='/diskA/wenqiang/lishuai/seq2seq_stable/Data/valid_3.txt')
