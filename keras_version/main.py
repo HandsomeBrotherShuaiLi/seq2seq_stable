@@ -109,20 +109,37 @@ class Data_2(object):
         dict=set()
         dict.add('<pad>')
         dict.add('<eou>')
+        each_sample_context_maxlen_list=[]#每个样本上下文任意一句最大的单词个数
+        each_sample_context_sentence_num=[]#每个样本多少行上下文
         for sample in self.train_data:
             temp=sample.split('\t')
+            maxlen=0
+            each_sample_context_sentence_num.append(len(temp[0].split('<eou>')))
+            for sentence in temp[0].split('<eou>'):
+                templen=len(sentence.split(' '))
+                if templen>maxlen:
+                    maxlen=templen
+            each_sample_context_maxlen_list.append(maxlen)
+
             input_len.append(len(temp[0].split(' ')))
             target_len.append(len(temp[1].split(' ')))
             for j in temp[0].split(' '):
                 dict.add(j)
             for j in temp[1].split(' '):
                 dict.add(j)
+
+        #此三个变量用来做batch padding用的
+        self.samples_context_maxlen_list=np.array(each_sample_context_maxlen_list)
+        self.samples_context_sentence_num=np.array(each_sample_context_sentence_num)
+        self.samples_response_len=np.array(target_len)
+        #
+
         self.dict={word:i for i,word in enumerate(list(dict))}
         self.max_input_len=max(input_len)
         self.max_target_len=max(target_len)
         self.max_vocab_len=len(self.dict)+1
         print('单词个数为:{}'.format(self.max_vocab_len))
-        print(self.max_input_len,self.max_target_len)
+        print('总数是{},训练steps是{}'.format(len(self.train_index),self.steps_per_epoch))
     def generator(self,is_valid=False,use_concept=False,union=True):
         index=self.train_index if is_valid==False else self.valid_index
         data=np.array(self.train_data)
@@ -162,49 +179,37 @@ class Data_2(object):
         elif use_concept==False and union==False:
             id=0
             while True:
-                decoder_input_data = []
-                decoder_target_data = []
                 if id + self.batch_size < len(index):
                     samples = data[index[id:id + self.batch_size]]
+                    samples_context_maxlens=self.samples_context_maxlen_list[index[id:id + self.batch_size]]
+                    samples_context_sentences_nums=self.samples_context_sentence_num[index[id:id + self.batch_size]]
+                    samples_response_lens=self.samples_response_len[index[id:id + self.batch_size]]
                 else:
                     temp_index =np.hstack((index[id:] , index[:(id + self.batch_size) % len(index)]))
                     samples = data[temp_index]
-                batch_max_sen_num=[]
-                batch_max_sen_len=[]
+                    samples_context_maxlens = self.samples_context_maxlen_list[temp_index]
+                    samples_context_sentences_nums = self.samples_context_sentence_num[temp_index]
+                    samples_response_lens = self.samples_response_len[temp_index]
+                encoder_input_data=np.zeros(shape=(self.batch_size,max(samples_context_sentences_nums),max(samples_context_maxlens)),
+                                            dtype='float32')
+                decoder_input_data=np.zeros(shape=(self.batch_size,max(samples_response_lens)),dtype='float32')
+                decoder_target_data=np.zeros(shape=(self.batch_size,max(samples_response_lens),self.max_vocab_len),dtype='float32')
                 for i,sample in enumerate(samples):
                     temp=sample.split('\t')
                     context=temp[0].split('<eou>')
-                    respone=temp[1].split(' ')
-                    decoder_input_instance=[0]*len(respone)
-                    decoder_target_instance=[0]*len(respone)
-                    for j,word in enumerate(respone):
-                        decoder_input_instance[j]=self.dict[word]
-                        if j>0:
-                            decoder_target_instance[j-1]=self.dict[word]
-                    context_sen_num=len(context)
-                    max_context_sen_len=max([len(j.split(' ')) for j in context])
-                    batch_max_sen_len.append(max_context_sen_len)
-                    batch_max_sen_num.append(context_sen_num)
-                    decoder_target_data.append(decoder_target_instance)
-                    decoder_input_data.append(decoder_input_instance)
-                encoder_input_data=np.zeros(shape=(self.batch_size,max(batch_max_sen_num),max(batch_max_sen_len)),dtype='float32')
-                for i,sample in enumerate(samples):
-                    temp = sample.split('\t')
-                    context = temp[0].split('<eou>')
+                    response=temp[1].split(' ')
                     for j,sentence in enumerate(context):
-                        for z,word in enumerate(sentence.split(' ')):
+                        words=sentence.split(' ')
+                        for z,word in enumerate(words):
                             encoder_input_data[i,j,z]=self.dict[word]
-                decoder_input_data=pad_sequences(decoder_input_data)
-                decoder_target_data=pad_sequences(decoder_target_data)
-                decoder_target_data=np.array(decoder_target_data,dtype='int32')
-                decoder_target_onehot=np.zeros(shape=(self.batch_size,decoder_target_data.shape[-1],self.max_vocab_len),dtype='float32')
-                for i in range(decoder_target_data.shape[0]):
-                    for j in range(decoder_target_data.shape[1]):
-                        decoder_target_onehot[i,j,decoder_target_data[i,j]]=1
-                inputs = {'encoder_input': encoder_input_data, 'decoder_input': np.array(decoder_input_data,dtype='float32')}
-                outputs = {'decoder_target': decoder_target_onehot}
+                    for j,word in enumerate(response):
+                        decoder_input_data[i,j]=self.dict[word]
+                        if j>0:
+                            decoder_target_data[i,j-1,self.dict[word]]=1.0
+                inputs = {'encoder_input': encoder_input_data, 'decoder_input': decoder_input_data}
+                outputs = {'decoder_target': decoder_target_data}
                 # print('encoder_input shape {}, decoder_input_shape {}, decoder_target shape {}'.format(
-                #     encoder_input_data.shape,decoder_input_data.shape,decoder_target_onehot.shape
+                #     encoder_input_data.shape,decoder_input_data.shape,decoder_target_data.shape
                 # ))
                 yield (inputs,outputs)
                 id = (id + self.batch_size) % (len(index))
@@ -292,5 +297,5 @@ class seq2seq(object):
 if __name__=='__main__':
     #'/diskA/wenqiang/lishuai/seq2seq_stable/data/train_3.txt'
     app=seq2seq(hidden=256)
-    app.train(batch_size=64,baseline=True,union=False,hierarchical=False,
+    app.train(batch_size=32,baseline=True,union=False,hierarchical=False,
               train_data_path='/diskA/wenqiang/lishuai/seq2seq_stable/data/train_3.txt')
