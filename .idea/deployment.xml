@@ -6,7 +6,14 @@
         <serverdata>
           <mappings>
             <mapping deploy="/diskA/wenqiang/lishuai/seq2seq_stable" local="$PROJECT_DIR$" web="/" />
-            <mapping local="" />
+            <mapping deploy="/diskA/lishuai/seq2seq_stable" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="nus_2">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/wing.nus/lishuai/seq2seq_stable" local="$PROJECT_DIR$" web="/" />
           </mappings>
         </serverdata>
       </paths>

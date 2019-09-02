@@ -4,7 +4,7 @@ from keras import Model
 from keras.optimizers import Adam,SGD,RMSprop
 import keras.backend as K
 from keras.preprocessing.sequence import pad_sequences
-import json
+import json,time
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau,TensorBoard,ModelCheckpoint
 def convert_to_one_hot(y, C):
     return np.eye(C)[y.reshape(-1)].T
@@ -96,6 +96,7 @@ class Data(object):
             pass
 class Data_2(object):
     def __init__(self,train_data_path,batch_size,split_ratio):
+        # print('{}-开始初始化'.format(time.ctime()))
         self.train_data=open(train_data_path,'r',encoding='utf-8').readlines()
         train_index=np.array(range(len(self.train_data)))
         valid_num=int(split_ratio*len(self.train_data))
@@ -138,12 +139,13 @@ class Data_2(object):
         self.max_input_len=max(input_len)
         self.max_target_len=max(target_len)
         self.max_vocab_len=len(self.dict)+1
-        print('单词个数为:{}'.format(self.max_vocab_len))
-        print('总数是{},训练steps是{}'.format(len(self.train_index),self.steps_per_epoch))
+        # print('单词个数为:{}'.format(self.max_vocab_len))
+        # print('总数是{},训练steps是{}'.format(len(self.train_index),self.steps_per_epoch))
+        # print('{}-结束初始化'.format(time.ctime()))
     def generator(self,is_valid=False,use_concept=False,union=True):
         index=self.train_index if is_valid==False else self.valid_index
         data=np.array(self.train_data)
-        # print('start generating...')
+        # print('{}-开始生成新的批次数据'.format(time.ctime()))
         if use_concept==False and union:
             encoder_input_data = np.zeros(
                 (self.batch_size, self.max_input_len),
@@ -193,11 +195,14 @@ class Data_2(object):
                 encoder_input_data=np.zeros(shape=(self.batch_size,max(samples_context_sentences_nums),max(samples_context_maxlens)),
                                             dtype='float32')
                 decoder_input_data=np.zeros(shape=(self.batch_size,max(samples_response_lens)),dtype='float32')
-                decoder_target_data=np.zeros(shape=(self.batch_size,max(samples_response_lens),self.max_vocab_len),dtype='float32')
+                decoder_target_data=[]
+                # decoder_target_data=np.zeros(shape=(self.batch_size,max(samples_response_lens),self.max_vocab_len),dtype='float32')
+                # 32 × 11 × 20
                 for i,sample in enumerate(samples):
                     temp=sample.split('\t')
                     context=temp[0].split('<eou>')
                     response=temp[1].split(' ')
+                    sample_target_data = np.zeros(shape=(max(samples_response_lens),), dtype='int')
                     for j,sentence in enumerate(context):
                         words=sentence.split(' ')
                         for z,word in enumerate(words):
@@ -205,12 +210,17 @@ class Data_2(object):
                     for j,word in enumerate(response):
                         decoder_input_data[i,j]=self.dict[word]
                         if j>0:
-                            decoder_target_data[i,j-1,self.dict[word]]=1.0
+                            sample_target_data[j-1]=int(self.dict[word])
+                    sample_target_onehot=np.zeros((max(samples_response_lens),self.max_vocab_len))
+                    sample_target_onehot[np.arange(max(samples_response_lens)),sample_target_data]=1
+                    decoder_target_data.append(sample_target_onehot)
+                decoder_target_data=np.array(decoder_target_data)
                 inputs = {'encoder_input': encoder_input_data, 'decoder_input': decoder_input_data}
                 outputs = {'decoder_target': decoder_target_data}
                 # print('encoder_input shape {}, decoder_input_shape {}, decoder_target shape {}'.format(
                 #     encoder_input_data.shape,decoder_input_data.shape,decoder_target_data.shape
                 # ))
+                # print('{}-送入网络'.format(time.ctime()))
                 yield (inputs,outputs)
                 id = (id + self.batch_size) % (len(index))
 
@@ -275,7 +285,7 @@ class seq2seq(object):
         model=self.build_network(max_vocab_len=data.max_vocab_len,is_training=True,baseline=baseline,hierarchical=hierarchical,
                                  union=union)
         model.compile(
-            optimizer=RMSprop(lr=0.001),
+            optimizer=Adam(lr=0.001),
             loss=['categorical_crossentropy']
         )
         model_att='union' if union else 'multi-lines'+'_hier_' if hierarchical else '_unhier_'
@@ -295,7 +305,7 @@ class seq2seq(object):
             ]
         )
 if __name__=='__main__':
-    #'/diskA/wenqiang/lishuai/seq2seq_stable/data/train_3.txt'
+    #'/diskA/wenqiang/lishuai/seq2seq_stable/Data/train_3.txt'
     app=seq2seq(hidden=256)
-    app.train(batch_size=32,baseline=True,union=False,hierarchical=False,split_ratio=0.2,
-              train_data_path='/diskA/wenqiang/lishuai/seq2seq_stable/Data/valid_3.txt')
+    app.train(batch_size=16,baseline=True,union=False,hierarchical=False,split_ratio=0.2,
+              train_data_path='../Data/train_3.txt')
