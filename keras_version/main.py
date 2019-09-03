@@ -50,13 +50,15 @@ class Data(object):
         self.samples_context_sentence_num=np.array(each_sample_context_sentence_num)
         self.samples_response_len=np.array(target_len)
         #
+        print('最大的行数是{}，最大的句子单词个数是{},最大的反馈的长度是{}'.format(max(self.samples_context_sentence_num),
+                                             max(self.samples_context_maxlen_list),max(self.samples_response_len)))
         self.dict={word:i for i,word in enumerate(list(dict))}
         self.max_vocab_len = len(self.dict) + 1
         if self.union:
             self.all_encoder_input = np.zeros(shape=(len(self.train_data), max(self.samples_context_sentence_num),
                                                      max(self.samples_context_maxlen_list)))
             self.all_decoder_input = np.zeros(shape=(len(self.train_data), max(self.samples_response_len)))
-            self.all_decoder_target = np.zeros(shape=(len(self.train_data), max(self.samples_response_len)),dtype='int')
+            self.all_decoder_target = np.zeros(shape=(len(self.train_data), max(self.samples_response_len)))
             for i, sample in enumerate(self.train_data):
                 temp = sample.split('\t')
                 context = temp[0].split('<eou>')
@@ -82,16 +84,18 @@ class Data(object):
                     batch_encoder_input_data=self.all_encoder_input[index[id:id + self.batch_size],:,:]
                     batch_decoder_input_data=self.all_decoder_input[index[id:id + self.batch_size],:]
                     batch_decoder_target_data=self.all_decoder_target[index[id:id + self.batch_size],:]
-                    batch_decoder_target_data=to_categorical(batch_decoder_target_data,self.max_vocab_len)
+                    # batch_decoder_target_data=to_categorical(batch_decoder_target_data,self.max_vocab_len)
                 else:
                     temp_index = np.hstack((index[id:],index[:(id + self.batch_size) % (len(index))]))
                     batch_encoder_input_data = self.all_encoder_input[temp_index, :, :]
                     batch_decoder_input_data = self.all_decoder_input[temp_index, :]
                     batch_decoder_target_data = self.all_decoder_target[temp_index, :]
-                    batch_decoder_target_data = to_categorical(batch_decoder_target_data, self.max_vocab_len)
+                    # batch_decoder_target_data = to_categorical(batch_decoder_target_data, self.max_vocab_len)
+
 
                 inputs = {'encoder_input': batch_encoder_input_data, 'decoder_input': batch_decoder_input_data}
                 outputs = {'decoder_target': batch_decoder_target_data}
+                print(batch_decoder_target_data.shape)
                 yield (inputs, outputs)
                 id = (id + self.batch_size) % (len(index))
 
@@ -121,7 +125,7 @@ class Data(object):
                     temp=sample.split('\t')
                     context=temp[0].split('<eou>')
                     response=temp[1].split(' ')
-                    sample_target_data = np.zeros(shape=(max(samples_response_lens),), dtype='int')
+                    sample_target_data = np.zeros(shape=(max(samples_response_lens),), dtype='float32')
                     for j,sentence in enumerate(context):
                         words=sentence.split(' ')
                         for z,word in enumerate(words):
@@ -147,10 +151,20 @@ class Data(object):
 class seq2seq(object):
     def __init__(self,hidden):
         self.hidden=hidden
-    def predict(self,x):
-        return K.argmax(x,axis=-1)
+    def nllloss(self,x,batch_size,response_max_len):
+        softmax_logs,targets=x
+        print(softmax_logs.get_shape(),targets.get_shape())
+        targets=K.eval(targets)
+        softmax_logs=K.eval(softmax_logs)
+        print(softmax_logs.shape, targets.shape)
+        res=0
+        for i in range(int(targets.shape[0])):
+            for j in range(int(targets.shape[1])):
+                res+=-K.log(softmax_logs[i,j,int(targets[i,j])])
+        return res/(int(batch_size)*int(response_max_len))
 
-    def build_network(self,max_vocab_len,baseline=True,is_training=True,union=False,hierarchical=False):
+    def build_network(self,max_vocab_len,baseline=True,is_training=True,union=False,hierarchical=False,
+                      context_maxlen=None,context_maxlines=None,response_max_num=None,batch_size=None):
         """
         :param baseline:
         :param is_training:
@@ -158,37 +172,75 @@ class seq2seq(object):
         """
         if baseline and hierarchical==False:
             """上下文分割成多行话来训练，但是非层次训练"""
-            encoder_inputs = Input(shape=(None,None,), name='encoder_input')
-            shared_embedding_layer = Embedding(max_vocab_len, self.hidden)
-            encoder = LSTM(self.hidden, return_state=True)
-            encoder_embed = shared_embedding_layer(encoder_inputs)
-            encoder_embed=Reshape(target_shape=(-1,self.hidden))(encoder_embed)
-            encoder_outputs, state_h, state_c = encoder(encoder_embed)
-            encoder_states = [state_h, state_c]
+            if union==False:
+                encoder_inputs = Input(shape=(None, None,), name='encoder_input')
+                shared_embedding_layer = Embedding(max_vocab_len, self.hidden)
+                encoder = LSTM(self.hidden, return_state=True)
+                encoder_embed = shared_embedding_layer(encoder_inputs)
+                encoder_embed = Reshape(target_shape=(-1, self.hidden))(encoder_embed)
+                encoder_outputs, state_h, state_c = encoder(encoder_embed)
+                encoder_states = [state_h, state_c]
 
-            decoder_inputs = Input(shape=(None,), name='decoder_input')
-            decoder_lstm = LSTM(self.hidden, return_sequences=True, return_state=True)
-            decoder_embed = shared_embedding_layer(decoder_inputs)
-            decoder_outputs, _, _ = decoder_lstm(decoder_embed,
-                                                 initial_state=encoder_states)
-            # decoder_outputs=Dense(max_vocab_len//2,activation='relu')(decoder_outputs)
-            decoder_softmax = Dense(max_vocab_len, activation='softmax',name='decoder_target')(decoder_outputs)
-            # decoder_argmax=Lambda(function=self.predict,name='decoder_target')(decoder_softmax)
-            model = Model([encoder_inputs, decoder_inputs], decoder_softmax) if is_training else Model(encoder_inputs,
-                                                                                                       decoder_softmax)
-            model.summary()
-            return model
+                decoder_inputs = Input(shape=(None,), name='decoder_input')
+                decoder_lstm = LSTM(self.hidden, return_sequences=True, return_state=True)
+                decoder_embed = shared_embedding_layer(decoder_inputs)
+                decoder_outputs, _, _ = decoder_lstm(decoder_embed,
+                                                     initial_state=encoder_states)
+                # decoder_outputs=Dense(max_vocab_len//2,activation='relu')(decoder_outputs)
+                decoder_softmax = Dense(max_vocab_len, activation='softmax', name='decoder_target')(decoder_outputs)
+                # decoder_argmax=Lambda(function=self.predict,name='decoder_target')(decoder_softmax)
+                model = Model([encoder_inputs, decoder_inputs], decoder_softmax) if is_training else Model(
+                    encoder_inputs,
+                    decoder_softmax)
+                model.summary()
+                return model
+            else:
+                encoder_inputs = Input(batch_shape=(batch_size, context_maxlines,context_maxlen), name='encoder_input')
+                shared_embedding_layer = Embedding(max_vocab_len, self.hidden)
+                encoder = LSTM(self.hidden, return_state=True)
+                encoder_embed = shared_embedding_layer(encoder_inputs)
+                encoder_embed = Reshape(target_shape=(-1, self.hidden),batch_size=batch_size)(encoder_embed)
+                encoder_outputs, state_h, state_c = encoder(encoder_embed)
+                encoder_states = [state_h, state_c]
+
+                decoder_inputs = Input(batch_shape=(batch_size,response_max_num), name='decoder_input')
+                decoder_lstm = LSTM(self.hidden, return_sequences=True, return_state=True)
+                decoder_embed = shared_embedding_layer(decoder_inputs)
+                decoder_outputs, _, _ = decoder_lstm(decoder_embed,
+                                                     initial_state=encoder_states)
+                decoder_softmax = Dense(max_vocab_len, activation='softmax')(decoder_outputs)
+                decoder_target = Input(batch_shape=(batch_size, response_max_num), name='decoder_target', dtype='float')
+                print(decoder_target.get_shape(),decoder_target.dtype)
+                nllloss=Lambda(function=self.nllloss,name='nllloss',
+                               arguments={'batch_size':batch_size,'response_max_len':response_max_num})([decoder_softmax,decoder_target])
+                model = Model([encoder_inputs, decoder_inputs], nllloss) if is_training else Model(
+                    encoder_inputs,
+                    decoder_softmax)
+                model.summary()
+                return model
 
     def train(self,batch_size,baseline=True,train_data_path='../Data/train_3.txt',split_ratio=0.1,
               union=False,hierarchical=False):
         data=Data(train_data_path=train_data_path,batch_size=batch_size,
                     split_ratio=split_ratio,union=union)
-        model=self.build_network(max_vocab_len=data.max_vocab_len,is_training=True,baseline=baseline,hierarchical=hierarchical,
-                                 union=union)
-        model.compile(
-            optimizer=Adam(lr=0.001),
-            loss=['categorical_crossentropy']
-        )
+
+        if union==False:
+            model = self.build_network(max_vocab_len=data.max_vocab_len, is_training=True, baseline=baseline,
+                                       hierarchical=hierarchical,
+                                       union=union)
+            model.compile(
+                optimizer=Adam(lr=0.001),
+                loss=['categorical_crossentropy']
+            )
+        else:
+            model = self.build_network(max_vocab_len=data.max_vocab_len, is_training=True, baseline=baseline,
+                                       hierarchical=hierarchical,batch_size=batch_size,context_maxlen=max(data.samples_context_maxlen_list),
+                                       union=union,context_maxlines=max(data.samples_context_sentence_num),
+                                       response_max_num=max(data.samples_response_len))
+            model.compile(
+                optimizer=Adam(lr=0.001),
+                loss={'nllloss': lambda y_true, y_pred: y_pred }
+            )
         model_att='union' if union else 'multi-lines'+'_hier_' if hierarchical else '_unhier_'
         model.fit_generator(
             generator=data.generator(is_valid=False),
@@ -202,11 +254,14 @@ class seq2seq(object):
                 ReduceLROnPlateau(patience=8,verbose=1,monitor='val_loss'),
                 EarlyStopping(monitor='val_loss',min_delta=1e-4,patience=28,verbose=1),
                 ModelCheckpoint(filepath='models/'+model_att+'seq2seq-{epoch:03d}--{val_loss:.5f}--{loss:.5f}.hdf5',
-                                save_best_only=True,save_weights_only=False,period=4)
+                                save_best_only=False,save_weights_only=False,period=4,verbose=1)
             ]
         )
 if __name__=='__main__':
     #'/diskA/wenqiang/lishuai/seq2seq_stable/Data/train_3.txt'
     app=seq2seq(hidden=256)
-    app.train(batch_size=32,baseline=True,union=False,hierarchical=False,split_ratio=0.2,
-              train_data_path='../Data/train_3.txt')
+    app.build_network(max_vocab_len=50000,union=True,hierarchical=False,context_maxlines=11,
+                      context_maxlen=146,response_max_num=105,batch_size=32)
+
+    # app.train(batch_size=16,baseline=True,union=True,hierarchical=False,split_ratio=0.2,
+    #           train_data_path='../Data/train_3.txt')
