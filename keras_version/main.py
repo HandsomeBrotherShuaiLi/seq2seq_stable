@@ -12,6 +12,14 @@ def convert_to_one_hot(y, C):
     return np.eye(C)[y.reshape(-1)].T
 class Data(object):
     def __init__(self,train_data_path,batch_size,split_ratio,union=False):
+        """
+
+        :param train_data_path:
+        :param batch_size:
+        :param split_ratio:
+        :param union:
+        """
+
         # print('{}-开始初始化'.format(time.ctime()))
         self.train_data=open(train_data_path,'r',encoding='utf-8').readlines()
         train_index=np.array(range(len(self.train_data)))
@@ -77,6 +85,12 @@ class Data(object):
         del train_index,valid_num
 
     def generator(self,is_valid=False,use_concept=False):
+        """
+
+        :param is_valid:
+        :param use_concept:
+        :return:
+        """
         index=self.train_index if is_valid==False else self.valid_index
         data=np.array(self.train_data)
         if use_concept==False and self.union:
@@ -138,8 +152,18 @@ class Data(object):
 
 class seq2seq(object):
     def __init__(self,hidden):
+        """
+
+        :param hidden:
+        """
         self.hidden=hidden
     def nllloss(self,x,max_vocab_len=None):
+        """
+
+        :param x:
+        :param max_vocab_len:
+        :return:
+        """
         softmax_logs,targets=x
         targets=K.cast(targets,dtype='int32')
         targets = K.one_hot(targets, max_vocab_len) if max_vocab_len!=None else K.one_hot(targets,int(softmax_logs.get_shape()[-1]))
@@ -149,8 +173,16 @@ class seq2seq(object):
     def build_network(self,max_vocab_len,baseline=True,is_training=True,union=False,hierarchical=False,
                       context_maxlen=None,context_maxlines=None,response_max_num=None,batch_size=None):
         """
+
+        :param max_vocab_len:
         :param baseline:
         :param is_training:
+        :param union:
+        :param hierarchical:
+        :param context_maxlen:
+        :param context_maxlines:
+        :param response_max_num:
+        :param batch_size:
         :return:
         """
         if baseline and hierarchical==False:
@@ -239,7 +271,6 @@ class seq2seq(object):
             ]
         )
 if __name__=='__main__':
-    #'/diskA/wenqiang/lishuai/seq2seq_stable/Data/train_3.txt'
     app=seq2seq(hidden=256)
     app.train(batch_size=16,baseline=True,union=False,hierarchical=False,split_ratio=0.2,
               train_data_path='../Data/train_3.txt')
