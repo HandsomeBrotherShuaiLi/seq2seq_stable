@@ -159,6 +159,7 @@ class seq2seq(object):
         self.hidden=hidden
     def nllloss(self,x,max_vocab_len=None):
         """
+        custom negative log likelihood loss for Keras
 
         :param x:
         :param max_vocab_len:
