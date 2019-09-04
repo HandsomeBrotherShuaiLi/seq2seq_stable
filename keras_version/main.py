@@ -222,7 +222,7 @@ class seq2seq(object):
                 optimizer=Adam(lr=0.001),
                 loss={'nllloss': lambda y_true, y_pred: y_pred}
             )
-        model_att='union' if union else 'multi-lines'+'_hier_' if hierarchical else '_unhier_'
+        model_att='new_union' if union else 'new_multi-lines'+'_hier_' if hierarchical else '_unhier_'
         model.fit_generator(
             generator=data.generator(is_valid=False),
             steps_per_epoch=data.steps_per_epoch,
@@ -241,5 +241,5 @@ class seq2seq(object):
 if __name__=='__main__':
     #'/diskA/wenqiang/lishuai/seq2seq_stable/Data/train_3.txt'
     app=seq2seq(hidden=256)
-    app.train(batch_size=64,baseline=True,union=False,hierarchical=False,split_ratio=0.2,
+    app.train(batch_size=16,baseline=True,union=False,hierarchical=False,split_ratio=0.2,
               train_data_path='../Data/train_3.txt')
