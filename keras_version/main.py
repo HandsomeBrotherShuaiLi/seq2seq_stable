@@ -6,6 +6,7 @@ import keras.backend as K
 from keras.preprocessing.sequence import pad_sequences
 from keras.utils import to_categorical
 import json,time
+import tensorflow as tf
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau,TensorBoard,ModelCheckpoint
 def convert_to_one_hot(y, C):
     return np.eye(C)[y.reshape(-1)].T
@@ -72,14 +73,16 @@ class Data(object):
                         self.all_encoder_input[i, j, z] = self.dict[word]
         self.max_input_len=max(input_len)
         self.max_target_len=max(target_len)
+        del each_sample_context_maxlen_list,each_sample_context_sentence_num,dict,input_len,target_len
+        del train_index,valid_num
 
     def generator(self,is_valid=False,use_concept=False):
         index=self.train_index if is_valid==False else self.valid_index
         data=np.array(self.train_data)
-        # print('{}-开始生成新的批次数据'.format(time.ctime()))
         if use_concept==False and self.union:
             id = 0
             while True:
+                print('{}-开始生成新的批次数据'.format(time.ctime()))
                 if id + self.batch_size < len(index):
                     batch_encoder_input_data=self.all_encoder_input[index[id:id + self.batch_size],:,:]
                     batch_decoder_input_data=self.all_decoder_input[index[id:id + self.batch_size],:]
@@ -91,11 +94,9 @@ class Data(object):
                     batch_decoder_input_data = self.all_decoder_input[temp_index, :]
                     batch_decoder_target_data = self.all_decoder_target[temp_index, :]
                     # batch_decoder_target_data = to_categorical(batch_decoder_target_data, self.max_vocab_len)
-
-
-                inputs = {'encoder_input': batch_encoder_input_data, 'decoder_input': batch_decoder_input_data}
-                outputs = {'decoder_target': batch_decoder_target_data}
-                print(batch_decoder_target_data.shape)
+                inputs = {'encoder_input': batch_encoder_input_data, 'decoder_input': batch_decoder_input_data,
+                          'decoder_target':batch_decoder_target_data}
+                outputs = {'nllloss': np.zeros([self.batch_size])}
                 yield (inputs, outputs)
                 id = (id + self.batch_size) % (len(index))
 
@@ -114,18 +115,14 @@ class Data(object):
                     samples_context_maxlens = self.samples_context_maxlen_list[temp_index]
                     samples_context_sentences_nums = self.samples_context_sentence_num[temp_index]
                     samples_response_lens = self.samples_response_len[temp_index]
-                encoder_input_data=np.zeros(shape=(self.batch_size,max(samples_context_sentences_nums),max(samples_context_maxlens)),
-                                            dtype='float32')
-                decoder_input_data=np.zeros(shape=(self.batch_size,max(samples_response_lens)),dtype='float32')
-                decoder_target_data=[]
+                encoder_input_data=np.zeros(shape=(self.batch_size,max(samples_context_sentences_nums),max(samples_context_maxlens)))
+                decoder_input_data=np.zeros(shape=(self.batch_size,max(samples_response_lens)))
+                decoder_target_data=np.zeros(shape=(self.batch_size,max(samples_response_lens)))
                 # decoder_target_data=np.zeros(shape=(self.batch_size,max(samples_response_lens),self.max_vocab_len),dtype='float32')
-                # 32 × 11 × 20
-                # print('{}-开始循环'.format(time.ctime()))
                 for i,sample in enumerate(samples):
                     temp=sample.split('\t')
                     context=temp[0].split('<eou>')
                     response=temp[1].split(' ')
-                    sample_target_data = np.zeros(shape=(max(samples_response_lens),), dtype='float32')
                     for j,sentence in enumerate(context):
                         words=sentence.split(' ')
                         for z,word in enumerate(words):
@@ -133,35 +130,21 @@ class Data(object):
                     for j,word in enumerate(response):
                         decoder_input_data[i,j]=self.dict[word]
                         if j>0:
-                            sample_target_data[j-1]=int(self.dict[word])
-                    # sample_target_onehot=np.zeros((max(samples_response_lens),self.max_vocab_len))
-                    # sample_target_onehot[np.arange(max(samples_response_lens)),sample_target_data]=1
-                    sample_target_onehot=to_categorical(sample_target_data,self.max_vocab_len)
-                    decoder_target_data.append(sample_target_onehot)
-                decoder_target_data=np.array(decoder_target_data)
-                inputs = {'encoder_input': encoder_input_data, 'decoder_input': decoder_input_data}
-                outputs = {'decoder_target': decoder_target_data}
-                # print('encoder_input shape {}, decoder_input_shape {}, decoder_target shape {}'.format(
-                #     encoder_input_data.shape,decoder_input_data.shape,decoder_target_data.shape
-                # ))
-                # print('{}-送入网络'.format(time.ctime()))
+                            decoder_target_data[i,j-1]=self.dict[word]
+                inputs = {'encoder_input': encoder_input_data, 'decoder_input': decoder_input_data,'decoder_target':decoder_target_data}
+                outputs = {'nllloss': np.zeros([self.batch_size])}
                 yield (inputs,outputs)
                 id = (id + self.batch_size) % (len(index))
 
 class seq2seq(object):
     def __init__(self,hidden):
         self.hidden=hidden
-    def nllloss(self,x,batch_size,response_max_len):
+    def nllloss(self,x,max_vocab_len=None):
         softmax_logs,targets=x
-        print(softmax_logs.get_shape(),targets.get_shape())
-        targets=K.eval(targets)
-        softmax_logs=K.eval(softmax_logs)
-        print(softmax_logs.shape, targets.shape)
-        res=0
-        for i in range(int(targets.shape[0])):
-            for j in range(int(targets.shape[1])):
-                res+=-K.log(softmax_logs[i,j,int(targets[i,j])])
-        return res/(int(batch_size)*int(response_max_len))
+        targets=K.cast(targets,dtype='int32')
+        targets = K.one_hot(targets, max_vocab_len) if max_vocab_len!=None else K.one_hot(targets,int(softmax_logs.get_shape()[-1]))
+        res=K.categorical_crossentropy(targets,softmax_logs)
+        return K.mean(res)
 
     def build_network(self,max_vocab_len,baseline=True,is_training=True,union=False,hierarchical=False,
                       context_maxlen=None,context_maxlines=None,response_max_num=None,batch_size=None):
@@ -186,10 +169,10 @@ class seq2seq(object):
                 decoder_embed = shared_embedding_layer(decoder_inputs)
                 decoder_outputs, _, _ = decoder_lstm(decoder_embed,
                                                      initial_state=encoder_states)
-                # decoder_outputs=Dense(max_vocab_len//2,activation='relu')(decoder_outputs)
-                decoder_softmax = Dense(max_vocab_len, activation='softmax', name='decoder_target')(decoder_outputs)
-                # decoder_argmax=Lambda(function=self.predict,name='decoder_target')(decoder_softmax)
-                model = Model([encoder_inputs, decoder_inputs], decoder_softmax) if is_training else Model(
+                decoder_softmax = Dense(max_vocab_len, activation='softmax')(decoder_outputs)
+                decoder_target = Input(batch_shape=(batch_size, response_max_num), name='decoder_target')
+                nllloss = Lambda(function=self.nllloss, name='nllloss',arguments={'max_vocab_len':max_vocab_len})([decoder_softmax, decoder_target])
+                model = Model([encoder_inputs, decoder_inputs,decoder_target], nllloss) if is_training else Model(
                     encoder_inputs,
                     decoder_softmax)
                 model.summary()
@@ -209,11 +192,9 @@ class seq2seq(object):
                 decoder_outputs, _, _ = decoder_lstm(decoder_embed,
                                                      initial_state=encoder_states)
                 decoder_softmax = Dense(max_vocab_len, activation='softmax')(decoder_outputs)
-                decoder_target = Input(batch_shape=(batch_size, response_max_num), name='decoder_target', dtype='float')
-                print(decoder_target.get_shape(),decoder_target.dtype)
-                nllloss=Lambda(function=self.nllloss,name='nllloss',
-                               arguments={'batch_size':batch_size,'response_max_len':response_max_num})([decoder_softmax,decoder_target])
-                model = Model([encoder_inputs, decoder_inputs], nllloss) if is_training else Model(
+                decoder_target = Input(batch_shape=(batch_size, response_max_num), name='decoder_target')
+                nllloss=Lambda(function=self.nllloss,name='nllloss',arguments={'max_vocab_len':None})([decoder_softmax,decoder_target])
+                model = Model([encoder_inputs, decoder_inputs,decoder_target], nllloss) if is_training else Model(
                     encoder_inputs,
                     decoder_softmax)
                 model.summary()
@@ -230,7 +211,7 @@ class seq2seq(object):
                                        union=union)
             model.compile(
                 optimizer=Adam(lr=0.001),
-                loss=['categorical_crossentropy']
+                loss={'nllloss': lambda y_true, y_pred: y_pred}
             )
         else:
             model = self.build_network(max_vocab_len=data.max_vocab_len, is_training=True, baseline=baseline,
@@ -239,7 +220,7 @@ class seq2seq(object):
                                        response_max_num=max(data.samples_response_len))
             model.compile(
                 optimizer=Adam(lr=0.001),
-                loss={'nllloss': lambda y_true, y_pred: y_pred }
+                loss={'nllloss': lambda y_true, y_pred: y_pred}
             )
         model_att='union' if union else 'multi-lines'+'_hier_' if hierarchical else '_unhier_'
         model.fit_generator(
@@ -260,8 +241,5 @@ class seq2seq(object):
 if __name__=='__main__':
     #'/diskA/wenqiang/lishuai/seq2seq_stable/Data/train_3.txt'
     app=seq2seq(hidden=256)
-    app.build_network(max_vocab_len=50000,union=True,hierarchical=False,context_maxlines=11,
-                      context_maxlen=146,response_max_num=105,batch_size=32)
-
-    # app.train(batch_size=16,baseline=True,union=True,hierarchical=False,split_ratio=0.2,
-    #           train_data_path='../Data/train_3.txt')
+    app.train(batch_size=64,baseline=True,union=False,hierarchical=False,split_ratio=0.2,
+              train_data_path='../Data/train_3.txt')
