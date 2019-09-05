@@ -1,13 +1,13 @@
 import numpy as np
-from keras.layers import Input,LSTM,Dense,Embedding,Reshape,Lambda
+from keras.layers import Input,LSTM,Dense,Embedding,Reshape,Lambda,Dropout
 from keras import Model
 from keras.optimizers import Adam,SGD,RMSprop
 import keras.backend as K
-from keras.preprocessing.sequence import pad_sequences
-from keras.utils import to_categorical
 import json,time
-import tensorflow as tf
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau,TensorBoard,ModelCheckpoint
+"""
+Word level seq2seq models
+"""
 def convert_to_one_hot(y, C):
     return np.eye(C)[y.reshape(-1)].T
 class Data(object):
@@ -19,8 +19,6 @@ class Data(object):
         :param split_ratio:
         :param union:
         """
-
-        # print('{}-开始初始化'.format(time.ctime()))
         self.train_data=open(train_data_path,'r',encoding='utf-8').readlines()
         train_index=np.array(range(len(self.train_data)))
         valid_num=int(split_ratio*len(self.train_data))
@@ -32,9 +30,12 @@ class Data(object):
         self.union=union
         input_len=[]
         target_len=[]
-        dict=set()
-        dict.add('<pad>')
-        dict.add('<eou>')
+        dict=[]
+        dict.append('<pad>')
+        dict.append('<eou>')
+        # \t response的开始， \n response的结束
+        dict.append('\t')
+        dict.append('\n')
         each_sample_context_maxlen_list=[]#每个样本上下文任意一句最大的单词个数
         each_sample_context_sentence_num=[]#每个样本多少行上下文
         for sample in self.train_data:
@@ -48,20 +49,21 @@ class Data(object):
             each_sample_context_maxlen_list.append(maxlen)
 
             input_len.append(len(temp[0].split(' ')))
+            temp[1]='\t '+temp[1]+' \n'
             target_len.append(len(temp[1].split(' ')))
             for j in temp[0].split(' '):
-                dict.add(j)
+                if j not in dict:
+                    dict.append(j)
             for j in temp[1].split(' '):
-                dict.add(j)
-
+                if j not in dict:
+                    dict.append(j)
         #此三个变量用来做batch padding用的
         self.samples_context_maxlen_list=np.array(each_sample_context_maxlen_list)
         self.samples_context_sentence_num=np.array(each_sample_context_sentence_num)
         self.samples_response_len=np.array(target_len)
-        #
         print('最大的行数是{}，最大的句子单词个数是{},最大的反馈的长度是{}'.format(max(self.samples_context_sentence_num),
                                              max(self.samples_context_maxlen_list),max(self.samples_response_len)))
-        self.dict={word:i for i,word in enumerate(list(dict))}
+        self.dict={word:i for i,word in enumerate(dict)}
         self.max_vocab_len = len(self.dict) + 1
         if self.union:
             self.all_encoder_input = np.zeros(shape=(len(self.train_data), max(self.samples_context_sentence_num),
@@ -71,6 +73,7 @@ class Data(object):
             for i, sample in enumerate(self.train_data):
                 temp = sample.split('\t')
                 context = temp[0].split('<eou>')
+                temp[1]='\t '+temp[1]+' \n'
                 response = temp[1].split(' ')
                 for j, word in enumerate(response):
                     self.all_decoder_input[i, j] = self.dict[word]
@@ -132,10 +135,10 @@ class Data(object):
                 encoder_input_data=np.zeros(shape=(self.batch_size,max(samples_context_sentences_nums),max(samples_context_maxlens)))
                 decoder_input_data=np.zeros(shape=(self.batch_size,max(samples_response_lens)))
                 decoder_target_data=np.zeros(shape=(self.batch_size,max(samples_response_lens)))
-                # decoder_target_data=np.zeros(shape=(self.batch_size,max(samples_response_lens),self.max_vocab_len),dtype='float32')
                 for i,sample in enumerate(samples):
                     temp=sample.split('\t')
                     context=temp[0].split('<eou>')
+                    temp[1]='\t '+temp[1]+' \n'
                     response=temp[1].split(' ')
                     for j,sentence in enumerate(context):
                         words=sentence.split(' ')
@@ -171,8 +174,9 @@ class seq2seq(object):
         res=K.categorical_crossentropy(targets,softmax_logs)
         return K.mean(res)
 
-    def build_network(self,max_vocab_len,baseline=True,is_training=True,union=False,hierarchical=False,
-                      context_maxlen=None,context_maxlines=None,response_max_num=None,batch_size=None):
+    def build_network(self,max_vocab_len,is_training=True,hierarchical=False,
+                      response_max_num=None,batch_size=None,
+                      depth=1,dropout=0.0,attention=False):
         """
 
         :param max_vocab_len:
@@ -186,71 +190,100 @@ class seq2seq(object):
         :param batch_size:
         :return:
         """
-        if baseline and hierarchical==False:
-            """上下文分割成多行话来训练，但是非层次训练"""
-            if union==False:
-                encoder_inputs = Input(shape=(None, None,), name='encoder_input')
-                shared_embedding_layer = Embedding(max_vocab_len, self.hidden)
-                encoder = LSTM(self.hidden, return_state=True)
-                encoder_embed = shared_embedding_layer(encoder_inputs)
-                encoder_embed = Reshape(target_shape=(-1, self.hidden))(encoder_embed)
-                encoder_outputs, state_h, state_c = encoder(encoder_embed)
+        if isinstance(depth,int):
+            depth=(depth,depth)
+        if hierarchical==False:
+
+            encoder_inputs = Input(shape=(None, None,), name='encoder_input')
+            shared_embedding_layer = Embedding(max_vocab_len, self.hidden,name='shared_embedding')
+            encoder_embed = shared_embedding_layer(encoder_inputs)
+            encoder_embed = Reshape(target_shape=(-1, self.hidden),name='reshape_layer')(encoder_embed)
+            encoder_outputs, state_h, state_c = LSTM(self.hidden, return_state=True,return_sequences=True,
+                                                     name='encoder_lstm_0')(encoder_embed)
+            encoder_states = [state_h, state_c]
+
+            for _ in range(1, depth[0]):
+                encoder_outputs = Dropout(dropout,name='encoder_dropout_{}'.format(_-1))(encoder_outputs)
+                encoder_outputs, state_h, state_c = LSTM(self.hidden, return_state=True,return_sequences=True,
+                                                         name='encoder_lstm_{}'.format(_))(encoder_outputs,initial_state=encoder_states)
                 encoder_states = [state_h, state_c]
 
-                decoder_inputs = Input(shape=(None,), name='decoder_input')
-                decoder_lstm = LSTM(self.hidden, return_sequences=True, return_state=True)
-                decoder_embed = shared_embedding_layer(decoder_inputs)
-                decoder_outputs, _, _ = decoder_lstm(decoder_embed,
-                                                     initial_state=encoder_states)
-                decoder_softmax = Dense(max_vocab_len, activation='softmax')(decoder_outputs)
-                decoder_target = Input(batch_shape=(batch_size, response_max_num), name='decoder_target')
-                nllloss = Lambda(function=self.nllloss, name='nllloss',arguments={'max_vocab_len':max_vocab_len})([decoder_softmax, decoder_target])
-                model = Model([encoder_inputs, decoder_inputs,decoder_target], nllloss) if is_training else Model(
-                    encoder_inputs,
-                    decoder_softmax)
-                model.summary()
-                return model
+            decoder_inputs = Input(shape=(None,), name='decoder_input')
+
+            decoder_state_input_h = Input(shape=(self.hidden,))
+            decoder_state_input_c = Input(shape=(self.hidden,))
+            decoder_states_inputs = [decoder_state_input_h, decoder_state_input_c]
+
+            decoder_embed = shared_embedding_layer(decoder_inputs)
+
+            def decoder_lstm_function(is_training):
+                if is_training:
+                    decoder_emb = Dropout(dropout,name='function_dropout_0')(decoder_embed)
+                    decoder_tensor, s_h, s_c = LSTM(self.hidden, return_sequences=True, return_state=True,name='function_lstm_0')(decoder_emb,
+                                                                                                           initial_state=encoder_states)
+                    states = [s_h, s_c]
+                    for _ in range(1, depth[1]):
+                        decoder_tensor=Dropout(dropout,name='function_dropout_{}'.format(_))(decoder_tensor)
+                        decoder_tensor, s_h, s_c = LSTM(self.hidden, return_state=True, return_sequences=True,name='function_lstm_{}'.format(_))(
+                            decoder_tensor,
+                            initial_state=states)
+                        states = [s_h, s_c]
+                    return decoder_tensor
+                else:
+                    decoder_emb = Dropout(dropout,name='function_dropout_0')(decoder_embed)
+                    decoder_tensor, s_h, s_c = LSTM(self.hidden, return_sequences=True, return_state=True,name='function_lstm_0')(decoder_emb,
+                                                                                                           initial_state=decoder_states_inputs)
+                    states = [s_h, s_c]
+                    for _ in range(1, depth[1]):
+                        decoder_tensor = Dropout(dropout, name='function_dropout_{}'.format(_))(decoder_tensor)
+                        decoder_tensor, s_h, s_c = LSTM(self.hidden, return_state=True, return_sequences=True,name='function_lstm_{}'.format(_))(
+                            decoder_tensor,
+                            initial_state=states)
+                        states = [s_h, s_c]
+                    return decoder_tensor, states
+
+            decoder_outputs = decoder_lstm_function(is_training=True)
+            decoder_dense = Dense(max_vocab_len, activation='softmax')
+            decoder_softmax = decoder_dense(decoder_outputs)
+            decoder_target = Input(batch_shape=(batch_size, response_max_num), name='decoder_target')
+            nllloss = Lambda(function=self.nllloss, name='nllloss', arguments={'max_vocab_len': max_vocab_len})(
+                [decoder_softmax, decoder_target])
+            train_model = Model([encoder_inputs, decoder_inputs, decoder_target], nllloss)
+
+            # for inference models
+            encoder_model = Model(encoder_inputs, encoder_states)
+
+            decoder_outputs, decoder_states = decoder_lstm_function(is_training=False)
+            decoder_softmax = decoder_dense(decoder_outputs)
+            decoder_model = Model(
+                [decoder_inputs] + decoder_states_inputs,
+                [decoder_softmax] + decoder_states)
+            if is_training:
+                train_model.summary()
+                return train_model
             else:
-                encoder_inputs = Input(batch_shape=(batch_size, context_maxlines,context_maxlen), name='encoder_input')
-                shared_embedding_layer = Embedding(max_vocab_len, self.hidden)
-                encoder = LSTM(self.hidden, return_state=True)
-                encoder_embed = shared_embedding_layer(encoder_inputs)
-                encoder_embed = Reshape(target_shape=(-1, self.hidden),batch_size=batch_size)(encoder_embed)
-                encoder_outputs, state_h, state_c = encoder(encoder_embed)
-                encoder_states = [state_h, state_c]
+                encoder_model.summary()
+                decoder_model.summary()
+                return (encoder_model, decoder_model)
 
-                decoder_inputs = Input(batch_shape=(batch_size,response_max_num), name='decoder_input')
-                decoder_lstm = LSTM(self.hidden, return_sequences=True, return_state=True)
-                decoder_embed = shared_embedding_layer(decoder_inputs)
-                decoder_outputs, _, _ = decoder_lstm(decoder_embed,
-                                                     initial_state=encoder_states)
-                decoder_softmax = Dense(max_vocab_len, activation='softmax')(decoder_outputs)
-                decoder_target = Input(batch_shape=(batch_size, response_max_num), name='decoder_target')
-                nllloss=Lambda(function=self.nllloss,name='nllloss',arguments={'max_vocab_len':None})([decoder_softmax,decoder_target])
-                model = Model([encoder_inputs, decoder_inputs,decoder_target], nllloss) if is_training else Model(
-                    encoder_inputs,
-                    decoder_softmax)
-                model.summary()
-                return model
-
-    def train(self,batch_size,baseline=True,train_data_path='../Data/train_3.txt',split_ratio=0.1,
-              union=False,hierarchical=False):
+    def train(self,batch_size,train_data_path='../Data/train_3.txt',split_ratio=0.1,
+              union=False,hierarchical=False,depth=1,dropout=0.0,attention=False):
         data=Data(train_data_path=train_data_path,batch_size=batch_size,
                     split_ratio=split_ratio,union=union)
 
         if union==False:
-            model = self.build_network(max_vocab_len=data.max_vocab_len, is_training=True, baseline=baseline,
+            model = self.build_network(max_vocab_len=data.max_vocab_len, is_training=True,
                                        hierarchical=hierarchical,
-                                       union=union)
+                                       depth=depth,dropout=dropout,attention=attention)
             model.compile(
                 optimizer=Adam(lr=0.001),
                 loss={'nllloss': lambda y_true, y_pred: y_pred}
             )
         else:
-            model = self.build_network(max_vocab_len=data.max_vocab_len, is_training=True, baseline=baseline,
-                                       hierarchical=hierarchical,batch_size=batch_size,context_maxlen=max(data.samples_context_maxlen_list),
-                                       union=union,context_maxlines=max(data.samples_context_sentence_num),
-                                       response_max_num=max(data.samples_response_len))
+            model = self.build_network(max_vocab_len=data.max_vocab_len, is_training=True,
+                                       hierarchical=hierarchical,batch_size=batch_size,
+                                       response_max_num=max(data.samples_response_len),
+                                       depth=depth,dropout=dropout,attention=attention)
             model.compile(
                 optimizer=Adam(lr=0.001),
                 loss={'nllloss': lambda y_true, y_pred: y_pred}
@@ -272,6 +305,9 @@ class seq2seq(object):
             ]
         )
 if __name__=='__main__':
+    # data = Data(train_data_path='../Data/train_3.txt', batch_size=8,
+    #             split_ratio=0.1, union=True)
     app=seq2seq(hidden=256)
-    app.train(batch_size=16,baseline=True,union=False,hierarchical=False,split_ratio=0.2,
-              train_data_path='../Data/train_3.txt')
+    app.build_network(max_vocab_len=50000,is_training=True,depth=(2,2))
+    # app.train(batch_size=16,union=False,hierarchical=False,split_ratio=0.2,
+    #           train_data_path='../Data/train_3.txt')
