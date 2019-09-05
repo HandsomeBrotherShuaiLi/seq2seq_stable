@@ -210,40 +210,40 @@ class seq2seq(object):
 
             decoder_inputs = Input(shape=(None,), name='decoder_input')
 
-            decoder_state_input_h = Input(shape=(self.hidden,))
-            decoder_state_input_c = Input(shape=(self.hidden,))
+            decoder_state_input_h = Input(shape=(self.hidden,),name='decoder_state_input_h')
+            decoder_state_input_c = Input(shape=(self.hidden,),name='decoder_state_input_c')
             decoder_states_inputs = [decoder_state_input_h, decoder_state_input_c]
 
             decoder_embed = shared_embedding_layer(decoder_inputs)
 
             def decoder_lstm_function(is_training):
                 if is_training:
-                    decoder_emb = Dropout(dropout,name='function_dropout_0')(decoder_embed)
-                    decoder_tensor, s_h, s_c = LSTM(self.hidden, return_sequences=True, return_state=True,name='function_lstm_0')(decoder_emb,
+                    decoder_emb = Dropout(dropout,name='decoder_dropout_0')(decoder_embed)
+                    decoder_tensor, s_h, s_c = LSTM(self.hidden, return_sequences=True, return_state=True,name='decoder_lstm_0')(decoder_emb,
                                                                                                            initial_state=encoder_states)
                     states = [s_h, s_c]
                     for _ in range(1, depth[1]):
-                        decoder_tensor=Dropout(dropout,name='function_dropout_{}'.format(_))(decoder_tensor)
-                        decoder_tensor, s_h, s_c = LSTM(self.hidden, return_state=True, return_sequences=True,name='function_lstm_{}'.format(_))(
+                        decoder_tensor=Dropout(dropout,name='decoder_dropout_{}'.format(_))(decoder_tensor)
+                        decoder_tensor, s_h, s_c = LSTM(self.hidden, return_state=True, return_sequences=True,name='decoder_lstm_{}'.format(_))(
                             decoder_tensor,
                             initial_state=states)
                         states = [s_h, s_c]
                     return decoder_tensor
                 else:
-                    decoder_emb = Dropout(dropout,name='function_dropout_0')(decoder_embed)
-                    decoder_tensor, s_h, s_c = LSTM(self.hidden, return_sequences=True, return_state=True,name='function_lstm_0')(decoder_emb,
+                    decoder_emb = Dropout(dropout,name='decoder_dropout_0')(decoder_embed)
+                    decoder_tensor, s_h, s_c = LSTM(self.hidden, return_sequences=True, return_state=True,name='decoder_lstm_0')(decoder_emb,
                                                                                                            initial_state=decoder_states_inputs)
                     states = [s_h, s_c]
                     for _ in range(1, depth[1]):
-                        decoder_tensor = Dropout(dropout, name='function_dropout_{}'.format(_))(decoder_tensor)
-                        decoder_tensor, s_h, s_c = LSTM(self.hidden, return_state=True, return_sequences=True,name='function_lstm_{}'.format(_))(
+                        decoder_tensor = Dropout(dropout, name='decoder_dropout_{}'.format(_))(decoder_tensor)
+                        decoder_tensor, s_h, s_c = LSTM(self.hidden, return_state=True, return_sequences=True,name='decoder_lstm_{}'.format(_))(
                             decoder_tensor,
                             initial_state=states)
                         states = [s_h, s_c]
                     return decoder_tensor, states
 
             decoder_outputs = decoder_lstm_function(is_training=True)
-            decoder_dense = Dense(max_vocab_len, activation='softmax')
+            decoder_dense = Dense(max_vocab_len, activation='softmax',name='softmax_vocab_len')
             decoder_softmax = decoder_dense(decoder_outputs)
             decoder_target = Input(batch_shape=(batch_size, response_max_num), name='decoder_target')
             nllloss = Lambda(function=self.nllloss, name='nllloss', arguments={'max_vocab_len': max_vocab_len})(
@@ -308,6 +308,6 @@ if __name__=='__main__':
     # data = Data(train_data_path='../Data/train_3.txt', batch_size=8,
     #             split_ratio=0.1, union=True)
     app=seq2seq(hidden=256)
-    app.build_network(max_vocab_len=50000,is_training=True,depth=(2,2))
+    app.build_network(max_vocab_len=50000,is_training=False,depth=(1,1))
     # app.train(batch_size=16,union=False,hierarchical=False,split_ratio=0.2,
     #           train_data_path='../Data/train_3.txt')
