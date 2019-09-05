@@ -5,6 +5,7 @@ from keras.optimizers import Adam,SGD,RMSprop
 import keras.backend as K
 import json,time
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau,TensorBoard,ModelCheckpoint
+from keras.utils import plot_model
 """
 Word level seq2seq models
 """
@@ -176,7 +177,7 @@ class seq2seq(object):
 
     def build_network(self,max_vocab_len,is_training=True,hierarchical=False,
                       response_max_num=None,batch_size=None,
-                      depth=1,dropout=0.0,attention=False):
+                      depth=1,dropout=0.0,attention=False,vis=False):
         """
 
         :param max_vocab_len:
@@ -260,10 +261,15 @@ class seq2seq(object):
                 [decoder_softmax] + decoder_states)
             if is_training:
                 train_model.summary()
+                if vis:
+                    plot_model(train_model,'../pngs/train_model.png')
                 return train_model
             else:
                 encoder_model.summary()
                 decoder_model.summary()
+                if vis:
+                    plot_model(encoder_model,'../pngs/encoder_model.png')
+                    plot_model(decoder_model,'../pngs/decoder_model.png')
                 return (encoder_model, decoder_model)
 
     def train(self,batch_size,train_data_path='../Data/train_3.txt',split_ratio=0.1,
@@ -308,6 +314,6 @@ if __name__=='__main__':
     # data = Data(train_data_path='../Data/train_3.txt', batch_size=8,
     #             split_ratio=0.1, union=True)
     app=seq2seq(hidden=256)
-    app.build_network(max_vocab_len=50000,is_training=False,depth=(1,1))
+    app.build_network(max_vocab_len=50000,is_training=True,depth=(3,4),vis=True)
     # app.train(batch_size=16,union=False,hierarchical=False,split_ratio=0.2,
     #           train_data_path='../Data/train_3.txt')
