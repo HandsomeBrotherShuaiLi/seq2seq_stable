@@ -314,6 +314,6 @@ if __name__=='__main__':
     # data = Data(train_data_path='../Data/train_3.txt', batch_size=8,
     #             split_ratio=0.1, union=True)
     app=seq2seq(hidden=256)
-    app.build_network(max_vocab_len=50000,is_training=True,depth=(3,4),vis=True)
-    # app.train(batch_size=16,union=False,hierarchical=False,split_ratio=0.2,
-    #           train_data_path='../Data/train_3.txt')
+    # app.build_network(max_vocab_len=50000,is_training=True,depth=(3,4),vis=True)
+    app.train(batch_size=16,union=False,hierarchical=False,split_ratio=0.2,
+              train_data_path='../Data/train_3.txt')
