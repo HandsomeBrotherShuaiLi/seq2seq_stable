@@ -66,6 +66,10 @@ class Data(object):
                                              max(self.samples_context_maxlen_list),max(self.samples_response_len)))
         self.dict={word:i for i,word in enumerate(dict)}
         self.max_vocab_len = len(self.dict) + 1
+        # if self.union:
+        #     self.all_encoder_input = np.load('all_encoder_input.npy')
+        #     self.all_decoder_input = np.load('all_decoder_input.npy')
+        #     self.all_decoder_target = np.load('all_decoder_target.npy')
         if self.union:
             self.all_encoder_input = np.zeros(shape=(len(self.train_data), max(self.samples_context_sentence_num),
                                                      max(self.samples_context_maxlen_list)))
@@ -83,6 +87,10 @@ class Data(object):
                 for j, sentence in enumerate(context):
                     for z, word in enumerate(sentence.split(' ')):
                         self.all_encoder_input[i, j, z] = self.dict[word]
+        #     np.save('all_encoder_input.npy',self.all_encoder_input)
+        #     np.save('all_decoder_input.npy',self.all_decoder_input)
+        #     np.save('all_decoder_target.npy',self.all_decoder_target)
+        #     print('save done!')
         self.max_input_len=max(input_len)
         self.max_target_len=max(target_len)
         del each_sample_context_maxlen_list,each_sample_context_sentence_num,dict,input_len,target_len
@@ -99,8 +107,9 @@ class Data(object):
         data=np.array(self.train_data)
         if use_concept==False and self.union:
             id = 0
+
             while True:
-                print('{}-开始生成新的批次数据'.format(time.ctime()))
+                # print('{}-开始生成新的批次数据'.format(time.ctime()))
                 if id + self.batch_size < len(index):
                     batch_encoder_input_data=self.all_encoder_input[index[id:id + self.batch_size],:,:]
                     batch_decoder_input_data=self.all_decoder_input[index[id:id + self.batch_size],:]
@@ -179,6 +188,7 @@ class seq2seq(object):
         return t
     def repeat(self,x):
         return RepeatVector(1)(x)
+
     def slice_repeat(self,x,context_line_num,depth,dropout):
         state = None
         encoder_hidden_states = []
@@ -411,7 +421,5 @@ class seq2seq(object):
         )
 if __name__=='__main__':
     app=seq2seq(hidden=256)
-    app.build_network(max_vocab_len=50000,is_training=True,hierarchical=True,depth=1,vis=True,
-                      context_max_len=100,context_line_num=11,batch_size=32,response_max_num=60)
-    # app.train(batch_size=64,union=False,hierarchical=False,split_ratio=0.2,
-    #           train_data_path='../Data/train_3.txt',depth=(2,2))
+    app.train(batch_size=16,train_data_path='../Data/valid_3.txt',union=True,hierarchical=True,
+              depth=2,dropout=0.3)

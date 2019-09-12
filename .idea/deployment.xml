@@ -1,12 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="On explicit save action" serverName="nus">
+  <component name="PublishConfigData" autoUpload="On explicit save action">
     <serverData>
       <paths name="nus">
         <serverdata>
           <mappings>
             <mapping deploy="/diskA/wenqiang/lishuai/seq2seq_stable" local="$PROJECT_DIR$" web="/" />
-            <mapping deploy="/diskA/lishuai/seq2seq_stable" local="$PROJECT_DIR$" />
           </mappings>
         </serverdata>
       </paths>
