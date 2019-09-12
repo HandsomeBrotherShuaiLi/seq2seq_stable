@@ -1,5 +1,5 @@
 import numpy as np
-from keras.layers import Input,LSTM,Dense,Embedding,Reshape,Lambda,Dropout
+from keras.layers import Input,LSTM,Dense,Embedding,Reshape,Lambda,Dropout,RepeatVector
 from keras import Model
 from keras.optimizers import Adam,SGD,RMSprop
 import keras.backend as K
@@ -174,9 +174,39 @@ class seq2seq(object):
         targets = K.one_hot(targets, max_vocab_len) if max_vocab_len!=None else K.one_hot(targets,int(softmax_logs.get_shape()[-1]))
         res=K.categorical_crossentropy(targets,softmax_logs)
         return K.mean(res)
+    def concat_function(self,x):
+        t=K.concatenate(x,axis=1)
+        return t
+    def repeat(self,x):
+        return RepeatVector(1)(x)
+    def slice_repeat(self,x,context_line_num,depth,dropout):
+        state = None
+        encoder_hidden_states = []
+        encoder_outputs=[]
+        for level in range(depth):
+            level_lstm=LSTM(self.hidden,return_sequences=True,return_state=True,name='encoder_lstm_{}'.format(level))
+            level_dropout=Dropout(dropout,name='encoder_dropout_{}'.format(level))
+            if level==0:
+                for i in range(context_line_num):
+                    utt_encoder_output, state_h, state_c = level_lstm(x[:, i, :, :], initial_state=state)
+                    utt_encoder_output = level_dropout(utt_encoder_output)
+                    encoder_outputs.append(utt_encoder_output)
+                    state = [state_h, state_c]
+                    state_h = RepeatVector(1)(state_h)
+                    encoder_hidden_states.append(state_h)
+            else:
+                for i in range(context_line_num):
+                    utt_encoder_output, state_h, state_c = level_lstm(encoder_outputs[i], initial_state=state)
+                    utt_encoder_output = level_dropout(utt_encoder_output)
+                    encoder_outputs[i]=utt_encoder_output
+                    state = [state_h, state_c]
+                    state_h = RepeatVector(1)(state_h)
+                    encoder_hidden_states.append(state_h)
+        encoder_hidden_states = K.concatenate(encoder_hidden_states,axis=1)
+        return encoder_hidden_states
 
     def build_network(self,max_vocab_len,is_training=True,hierarchical=False,
-                      response_max_num=None,batch_size=None,
+                      response_max_num=None,batch_size=None,context_line_num=None,context_max_len=None,
                       depth=1,dropout=0.0,attention=False,vis=False):
         """
 
@@ -191,8 +221,10 @@ class seq2seq(object):
         :param batch_size:
         :return:
         """
-        if isinstance(depth,int):
-            depth=(depth,depth)
+        if isinstance(depth,list) or isinstance(depth,tuple):
+            pass
+        else:
+            depth = (depth, depth)
         if hierarchical==False:
 
             encoder_inputs = Input(shape=(None, None,), name='encoder_input')
@@ -232,6 +264,7 @@ class seq2seq(object):
                     return decoder_tensor
                 else:
                     decoder_emb = Dropout(dropout,name='decoder_dropout_0')(decoder_embed)
+                    #注意此时输入的initial state是 decoder_input_states
                     decoder_tensor, s_h, s_c = LSTM(self.hidden, return_sequences=True, return_state=True,name='decoder_lstm_0')(decoder_emb,
                                                                                                            initial_state=decoder_states_inputs)
                     states = [s_h, s_c]
@@ -262,21 +295,85 @@ class seq2seq(object):
             if is_training:
                 train_model.summary()
                 if vis:
-                    plot_model(train_model,'../pngs/train_model.png')
+                    plot_model(train_model,'pngs/train_model.png')
                 return train_model
             else:
                 encoder_model.summary()
                 decoder_model.summary()
                 if vis:
-                    plot_model(encoder_model,'../pngs/encoder_model.png')
-                    plot_model(decoder_model,'../pngs/decoder_model.png')
+                    plot_model(encoder_model,'pngs/encoder_model.png')
+                    plot_model(decoder_model,'pngs/decoder_model.png')
                 return (encoder_model, decoder_model)
+        else:
+            encoder_inputs = Input(batch_shape=(batch_size,context_line_num,context_max_len,), name='encoder_input')
+            shared_embedding_layer = Embedding(max_vocab_len, self.hidden, name='shared_embedding')
+            encoder_embed = shared_embedding_layer(encoder_inputs)
+            encoder_hidden_states=Lambda(self.slice_repeat,
+                                         arguments={'context_line_num':context_line_num,'depth':depth[0],'dropout':dropout},
+                                         name='encoder_lambda')(encoder_embed)
+            decoder_inputs = Input(batch_shape=(batch_size,response_max_num,), name='decoder_input')
+            decoder_state_input_h = Input(batch_shape=(batch_size,context_line_num*depth[0],self.hidden,), name='decoder_state_input_h')
+
+            decoder_embed = shared_embedding_layer(decoder_inputs)
+
+            context_lstm=LSTM(self.hidden,return_state=True)
+            if is_training == True:
+                context_ouputs, context_h, context_c = context_lstm(encoder_hidden_states)
+            else:
+                context_outputs,context_h,context_c= context_lstm(decoder_state_input_h)
+            context_states=[context_h,context_c]
+            def decoder_lstm_function(is_training):
+                decoder_emb = Dropout(dropout, name='decoder_dropout_0')(decoder_embed)
+                decoder_tensor, s_h, s_c = LSTM(self.hidden, return_sequences=True, return_state=True,
+                                                name='decoder_lstm_0')(decoder_emb,
+                                                                       initial_state=context_states)
+                states = [s_h, s_c]
+                for _ in range(1, depth[1]):
+                    decoder_tensor = Dropout(dropout, name='decoder_dropout_{}'.format(_))(decoder_tensor)
+                    decoder_tensor, s_h, s_c = LSTM(self.hidden, return_state=True, return_sequences=True,
+                                                    name='decoder_lstm_{}'.format(_))(
+                        decoder_tensor,
+                        initial_state=states)
+                    states = [s_h, s_c]
+                if is_training:
+                    return decoder_tensor
+                else:
+                    return decoder_tensor,states
+
+            decoder_outputs = decoder_lstm_function(is_training=True)
+            decoder_dense = Dense(max_vocab_len, activation='softmax', name='softmax_vocab_len')
+            decoder_softmax = decoder_dense(decoder_outputs)
+            decoder_target = Input(batch_shape=(batch_size, response_max_num), name='decoder_target')
+            nllloss = Lambda(function=self.nllloss, name='nllloss', arguments={'max_vocab_len': max_vocab_len})(
+                [decoder_softmax, decoder_target])
+
+            if is_training:
+                train_model = Model([encoder_inputs, decoder_inputs, decoder_target], nllloss)
+                train_model.summary()
+                if vis:
+                    plot_model(train_model,'pngs/hierarchical_train_model.png')
+                return train_model
+            else:
+                encoder_model = Model(encoder_inputs, encoder_hidden_states)
+                decoder_outputs, decoder_states = decoder_lstm_function(is_training=False)
+                decoder_softmax = decoder_dense(decoder_outputs)
+                decoder_model = Model(
+                    [decoder_inputs] + [decoder_state_input_h],
+                    [decoder_softmax] + decoder_states)
+                encoder_model.summary()
+                decoder_model.summary()
+                if vis:
+                    plot_model(encoder_model,'pngs/hierarchical_encoder_model.png')
+                    plot_model(decoder_model,'pngs/hierarchical_decoder_model.png')
+                return (encoder_model)
+
 
     def train(self,batch_size,train_data_path='../Data/train_3.txt',split_ratio=0.1,
               union=False,hierarchical=False,depth=1,dropout=0.0,attention=False):
+        if hierarchical:
+            union=True
         data=Data(train_data_path=train_data_path,batch_size=batch_size,
                     split_ratio=split_ratio,union=union)
-
         if union==False:
             model = self.build_network(max_vocab_len=data.max_vocab_len, is_training=True,
                                        hierarchical=hierarchical,
@@ -289,6 +386,8 @@ class seq2seq(object):
             model = self.build_network(max_vocab_len=data.max_vocab_len, is_training=True,
                                        hierarchical=hierarchical,batch_size=batch_size,
                                        response_max_num=max(data.samples_response_len),
+                                       context_line_num=max(data.samples_context_sentence_num),
+                                       context_max_len=max(data.samples_context_maxlen_list),
                                        depth=depth,dropout=dropout,attention=attention)
             model.compile(
                 optimizer=Adam(lr=0.001),
@@ -311,9 +410,8 @@ class seq2seq(object):
             ]
         )
 if __name__=='__main__':
-    # data = Data(train_data_path='../Data/train_3.txt', batch_size=8,
-    #             split_ratio=0.1, union=True)
     app=seq2seq(hidden=256)
-    app.build_network(max_vocab_len=50000,is_training=True,depth=(3,4),vis=True)
-    # app.train(batch_size=16,union=False,hierarchical=False,split_ratio=0.2,
-    #           train_data_path='../Data/train_3.txt')
+    app.build_network(max_vocab_len=50000,is_training=True,hierarchical=True,depth=1,vis=True,
+                      context_max_len=100,context_line_num=11,batch_size=32,response_max_num=60)
+    # app.train(batch_size=64,union=False,hierarchical=False,split_ratio=0.2,
+    #           train_data_path='../Data/train_3.txt',depth=(2,2))
