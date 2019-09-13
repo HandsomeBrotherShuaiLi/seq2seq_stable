@@ -67,31 +67,6 @@ class Data(object):
                                              max(self.samples_context_maxlen_list),max(self.samples_response_len)))
         self.dict={word:i for i,word in enumerate(dict)}
         self.max_vocab_len = len(self.dict) + 1
-        # if self.union:
-        #     self.all_encoder_input = np.load('all_encoder_input.npy')
-        #     self.all_decoder_input = np.load('all_decoder_input.npy')
-        #     self.all_decoder_target = np.load('all_decoder_target.npy')
-        if self.union:
-            self.all_encoder_input = np.zeros(shape=(len(self.train_data), max(self.samples_context_sentence_num),
-                                                     max(self.samples_context_maxlen_list)))
-            self.all_decoder_input = np.zeros(shape=(len(self.train_data), max(self.samples_response_len)))
-            self.all_decoder_target = np.zeros(shape=(len(self.train_data), max(self.samples_response_len)))
-            for i, sample in enumerate(self.train_data):
-                temp = sample.split('\t')
-                context = temp[0].split('<eou>')
-                temp[1]='\t '+temp[1]+' \n'
-                response = temp[1].split(' ')
-                for j, word in enumerate(response):
-                    self.all_decoder_input[i, j] = self.dict[word]
-                    if j > 0:
-                        self.all_decoder_target[i, j - 1] = self.dict[word]
-                for j, sentence in enumerate(context):
-                    for z, word in enumerate(sentence.split(' ')):
-                        self.all_encoder_input[i, j, z] = self.dict[word]
-        #     np.save('all_encoder_input.npy',self.all_encoder_input)
-        #     np.save('all_decoder_input.npy',self.all_decoder_input)
-        #     np.save('all_decoder_target.npy',self.all_decoder_target)
-        #     print('save done!')
         self.max_input_len=max(input_len)
         self.max_target_len=max(target_len)
         del each_sample_context_maxlen_list,each_sample_context_sentence_num,dict,input_len,target_len
@@ -106,29 +81,7 @@ class Data(object):
         """
         index=self.train_index if is_valid==False else self.valid_index
         data=np.array(self.train_data)
-        if use_concept==False and self.union:
-            id = 0
-
-            while True:
-                # print('{}-开始生成新的批次数据'.format(time.ctime()))
-                if id + self.batch_size < len(index):
-                    batch_encoder_input_data=self.all_encoder_input[index[id:id + self.batch_size],:,:]
-                    batch_decoder_input_data=self.all_decoder_input[index[id:id + self.batch_size],:]
-                    batch_decoder_target_data=self.all_decoder_target[index[id:id + self.batch_size],:]
-                    # batch_decoder_target_data=to_categorical(batch_decoder_target_data,self.max_vocab_len)
-                else:
-                    temp_index = np.hstack((index[id:],index[:(id + self.batch_size) % (len(index))]))
-                    batch_encoder_input_data = self.all_encoder_input[temp_index, :, :]
-                    batch_decoder_input_data = self.all_decoder_input[temp_index, :]
-                    batch_decoder_target_data = self.all_decoder_target[temp_index, :]
-                    # batch_decoder_target_data = to_categorical(batch_decoder_target_data, self.max_vocab_len)
-                inputs = {'encoder_input': batch_encoder_input_data, 'decoder_input': batch_decoder_input_data,
-                          'decoder_target':batch_decoder_target_data}
-                outputs = {'nllloss': np.zeros([self.batch_size])}
-                yield (inputs, outputs)
-                id = (id + self.batch_size) % (len(index))
-
-        elif use_concept==False and self.union==False:
+        if use_concept==False:
             id=0
             #每一个批次的size不一样,不是固定的size
             while True:
@@ -143,7 +96,12 @@ class Data(object):
                     samples_context_maxlens = self.samples_context_maxlen_list[temp_index]
                     samples_context_sentences_nums = self.samples_context_sentence_num[temp_index]
                     samples_response_lens = self.samples_response_len[temp_index]
-                encoder_input_data=np.zeros(shape=(self.batch_size,max(samples_context_sentences_nums),max(samples_context_maxlens)))
+                if self.union==False:
+                    encoder_input_data = np.zeros(
+                        shape=(self.batch_size, max(samples_context_sentences_nums), max(samples_context_maxlens)))
+                else:
+                    encoder_input_data = np.zeros(
+                        shape=(self.batch_size, max(self.samples_context_sentence_num), max(samples_context_maxlens)))
                 decoder_input_data=np.zeros(shape=(self.batch_size,max(samples_response_lens)))
                 decoder_target_data=np.zeros(shape=(self.batch_size,max(samples_response_lens)))
                 for i,sample in enumerate(samples):
@@ -226,8 +184,7 @@ class seq2seq(object):
         return encoder_hidden_states
 
     def build_network(self,max_vocab_len,is_training=True,hierarchical=False,
-                      response_max_num=None,batch_size=None,context_line_num=None,context_max_len=None,
-                      depth=1,dropout=0.0,attention=False,vis=False):
+                      context_line_num=None,depth=1,dropout=0.0,attention=False,vis=False):
         """
 
         :param max_vocab_len:
@@ -297,7 +254,7 @@ class seq2seq(object):
             decoder_outputs = decoder_lstm_function(is_training=True)
             decoder_dense = Dense(max_vocab_len, activation='softmax',name='softmax_vocab_len')
             decoder_softmax = decoder_dense(decoder_outputs)
-            decoder_target = Input(batch_shape=(batch_size, response_max_num), name='decoder_target')
+            decoder_target = Input(shape=(None,), name='decoder_target')
             nllloss = Lambda(function=self.nllloss, name='nllloss', arguments={'max_vocab_len': max_vocab_len})(
                 [decoder_softmax, decoder_target])
             train_model = Model([encoder_inputs, decoder_inputs, decoder_target], nllloss)
@@ -323,7 +280,7 @@ class seq2seq(object):
                     plot_model(decoder_model,'pngs/decoder_model.png')
                 return encoder_model, decoder_model
         else:
-            encoder_inputs = Input(shape=(None,None,), name='encoder_input')
+            encoder_inputs = Input(shape=(context_line_num,None,), name='encoder_input')
             shared_embedding_layer = Embedding(max_vocab_len, self.hidden, name='shared_embedding')
             encoder_embed = shared_embedding_layer(encoder_inputs)
             encoder_hidden_states=Lambda(self.slice_repeat,
@@ -402,6 +359,8 @@ class seq2seq(object):
         :param mode: 1 denotes train mode and others means prediction mode
         :return:
         """
+        if hierarchical:
+            union=True
         data=Data(train_data_path=train_data_path,batch_size=batch_size,
                     split_ratio=split_ratio,union=union)
         if hierarchical==False:
@@ -417,10 +376,12 @@ class seq2seq(object):
             )
         else:
             model = self.build_network(max_vocab_len=data.max_vocab_len, is_training=True,
-                                       hierarchical=hierarchical,context_line_num=11,
+                                       hierarchical=hierarchical,
+                                       context_line_num=max(data.samples_context_sentence_num),
                                        depth=depth, dropout=dropout, attention=attention)
             encoder_model, decoder_model = self.build_network(max_vocab_len=data.max_vocab_len, is_training=False,
-                                                              hierarchical=hierarchical,context_line_num=11,
+                                                              hierarchical=hierarchical,
+                                                              context_line_num=max(data.samples_context_sentence_num),
                                                               depth=depth, dropout=dropout, attention=attention)
             model.compile(
                 optimizer=Adam(lr=0.001),
@@ -493,7 +454,6 @@ class seq2seq(object):
 
 if __name__=='__main__':
     app=seq2seq(hidden=256)
-    # app.build_network(max_vocab_len=50000,is_training=True,hierarchical=True,depth=2,context_line_num=11)
     app.train(batch_size=2,train_data_path='../Data/train_3.txt',union=False,hierarchical=True,
               depth=2,dropout=0.3,mode=1,predict_model_path='models/nonebatch_unionseq2seq-004--0.99970--1.00288.hdf5',
               valid_data_path='../Data/valid_3.txt')
