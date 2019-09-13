@@ -1,9 +1,8 @@
 import numpy as np
 from keras.layers import Input,LSTM,Dense,Embedding,Reshape,Lambda,Dropout,RepeatVector
 from keras import Model
-from keras.optimizers import Adam,SGD,RMSprop
+from keras.optimizers import Adam
 import keras.backend as K
-import json,time
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau,TensorBoard,ModelCheckpoint
 from keras.utils import plot_model
 """
@@ -35,6 +34,7 @@ class Data(object):
         dict=[]
         dict.append('<pad>')
         dict.append('<eou>')
+        dict.append('<unk>')
         # \t response的开始， \n response的结束
         dict.append('\t')
         dict.append('\n')
@@ -199,21 +199,30 @@ class seq2seq(object):
             level_dropout=Dropout(dropout,name='encoder_dropout_{}'.format(level))
             if level==0:
                 for i in range(context_line_num):
-                    utt_encoder_output, state_h, state_c = level_lstm(x[:, i, :, :], initial_state=state)
-                    utt_encoder_output = level_dropout(utt_encoder_output)
-                    encoder_outputs.append(utt_encoder_output)
-                    state = [state_h, state_c]
-                    state_h = RepeatVector(1)(state_h)
-                    encoder_hidden_states.append(state_h)
+                    try:
+                        utt_encoder_output, state_h, state_c = level_lstm(x[:, i, :, :], initial_state=state)
+                        utt_encoder_output = level_dropout(utt_encoder_output)
+                        encoder_outputs.append(utt_encoder_output)
+                        state = [state_h, state_c]
+                        state_h = RepeatVector(1)(state_h)
+                        encoder_hidden_states.append(state_h)
+                    except Exception as e:
+                        print(e)
+                        break
             else:
                 for i in range(context_line_num):
-                    utt_encoder_output, state_h, state_c = level_lstm(encoder_outputs[i], initial_state=state)
-                    utt_encoder_output = level_dropout(utt_encoder_output)
-                    encoder_outputs[i]=utt_encoder_output
-                    state = [state_h, state_c]
-                    state_h = RepeatVector(1)(state_h)
-                    encoder_hidden_states.append(state_h)
+                    try:
+                        utt_encoder_output, state_h, state_c = level_lstm(encoder_outputs[i], initial_state=state)
+                        utt_encoder_output = level_dropout(utt_encoder_output)
+                        encoder_outputs[i] = utt_encoder_output
+                        state = [state_h, state_c]
+                        state_h = RepeatVector(1)(state_h)
+                        encoder_hidden_states.append(state_h)
+                    except Exception as e:
+                        print(e)
+                        break
         encoder_hidden_states = K.concatenate(encoder_hidden_states,axis=1)
+        print(encoder_hidden_states.get_shape())
         return encoder_hidden_states
 
     def build_network(self,max_vocab_len,is_training=True,hierarchical=False,
@@ -314,14 +323,14 @@ class seq2seq(object):
                     plot_model(decoder_model,'pngs/decoder_model.png')
                 return encoder_model, decoder_model
         else:
-            encoder_inputs = Input(shape=(context_line_num,context_max_len,), name='encoder_input')
+            encoder_inputs = Input(shape=(None,None,), name='encoder_input')
             shared_embedding_layer = Embedding(max_vocab_len, self.hidden, name='shared_embedding')
             encoder_embed = shared_embedding_layer(encoder_inputs)
             encoder_hidden_states=Lambda(self.slice_repeat,
                                          arguments={'context_line_num':context_line_num,'depth':depth[0],'dropout':dropout},
                                          name='encoder_lambda')(encoder_embed)
-            decoder_inputs = Input(shape=(response_max_num,), name='decoder_input')
-            decoder_state_input_h = Input(shape=(context_line_num*depth[0],self.hidden,), name='decoder_state_input_h')
+            decoder_inputs = Input(shape=(None,), name='decoder_input')
+            decoder_state_input_h = Input(shape=(None,self.hidden,), name='decoder_state_input_h')
 
             decoder_embed = shared_embedding_layer(decoder_inputs)
 
@@ -352,7 +361,7 @@ class seq2seq(object):
             decoder_outputs = decoder_lstm_function(is_training=True)
             decoder_dense = Dense(max_vocab_len, activation='softmax', name='softmax_vocab_len')
             decoder_softmax = decoder_dense(decoder_outputs)
-            decoder_target = Input(shape=(response_max_num), name='decoder_target')
+            decoder_target = Input(shape=(None,), name='decoder_target')
             nllloss = Lambda(function=self.nllloss, name='nllloss', arguments={'max_vocab_len': max_vocab_len})(
                 [decoder_softmax, decoder_target])
 
@@ -393,12 +402,9 @@ class seq2seq(object):
         :param mode: 1 denotes train mode and others means prediction mode
         :return:
         """
-
-        if hierarchical:
-            union=True
         data=Data(train_data_path=train_data_path,batch_size=batch_size,
                     split_ratio=split_ratio,union=union)
-        if union==False:
+        if hierarchical==False:
             model = self.build_network(max_vocab_len=data.max_vocab_len, is_training=True,
                                        hierarchical=hierarchical,
                                        depth=depth,dropout=dropout,attention=attention)
@@ -411,21 +417,14 @@ class seq2seq(object):
             )
         else:
             model = self.build_network(max_vocab_len=data.max_vocab_len, is_training=True,
-                                       hierarchical=hierarchical,batch_size=batch_size,
-                                       response_max_num=max(data.samples_response_len),
-                                       context_line_num=max(data.samples_context_sentence_num),
-                                       context_max_len=max(data.samples_context_maxlen_list),
-                                       depth=depth,dropout=dropout,attention=attention)
-            encoder_model,decoder_model=self.build_network(max_vocab_len=data.max_vocab_len, is_training=False,
-                                       hierarchical=hierarchical,batch_size=batch_size,
-                                       response_max_num=max(data.samples_response_len),
-                                       context_line_num=max(data.samples_context_sentence_num),
-                                       context_max_len=max(data.samples_context_maxlen_list),
-                                       depth=depth,dropout=dropout,attention=attention)
+                                       hierarchical=hierarchical,context_line_num=11,
+                                       depth=depth, dropout=dropout, attention=attention)
+            encoder_model, decoder_model = self.build_network(max_vocab_len=data.max_vocab_len, is_training=False,
+                                                              hierarchical=hierarchical,context_line_num=11,
+                                                              depth=depth, dropout=dropout, attention=attention)
             model.compile(
                 optimizer=Adam(lr=0.001),
-                loss={'nllloss': lambda y_true, y_pred: y_pred}
-            )
+                loss={'nllloss': lambda y_true, y_pred: y_pred})
         model_att='new_union' if union else 'new_multi-lines'+'_hier_' if hierarchical else '_unhier_'
         if mode==1:
             model.fit_generator(
@@ -469,7 +468,7 @@ class seq2seq(object):
                         temp=sample.split('\t')
                         context=temp[0].split('<eou>')
                         contexts.append('\n'.join(context))
-                        ground_truths.append(temp[1])
+                        # ground_truths.append(temp[1])
                         for line,sentence in enumerate(context):
                             if line<max(data.samples_context_sentence_num):
                                 words=sentence.split(' ')
@@ -478,9 +477,9 @@ class seq2seq(object):
                                         try:
                                             batch_encoder_input[i, line, z] = data.dict[word]
                                         except:
-                                            batch_encoder_input[i, line, z] = 0
+                                            batch_encoder_input[i, line, z] = data.dict['<unk>']
                     encoder_states=encoder_model.predict(batch_encoder_input)
-                    batch_decoder_input[:,:]=data.dict['\t']
+                    batch_decoder_input[0,0]=data.dict['\t']
                     stop_condition = False
                     decoded_sentence = ''
                     while not stop_condition:
@@ -492,9 +491,9 @@ class seq2seq(object):
                         # decoder_word=id2word[sampled_token_index]
                     break
 
-
 if __name__=='__main__':
     app=seq2seq(hidden=256)
-    app.train(batch_size=16,train_data_path='../Data/train_3.txt',union=True,hierarchical=True,
-              depth=2,dropout=0.3,mode=2,predict_model_path='models/new_unionseq2seq-008--0.94552--0.90485.hdf5',
+    # app.build_network(max_vocab_len=50000,is_training=True,hierarchical=True,depth=2,context_line_num=11)
+    app.train(batch_size=2,train_data_path='../Data/train_3.txt',union=False,hierarchical=True,
+              depth=2,dropout=0.3,mode=1,predict_model_path='models/nonebatch_unionseq2seq-004--0.99970--1.00288.hdf5',
               valid_data_path='../Data/valid_3.txt')
