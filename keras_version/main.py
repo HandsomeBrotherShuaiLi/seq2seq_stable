@@ -9,6 +9,7 @@ from keras.utils import plot_model
 """
 Word level seq2seq models
 """
+
 def convert_to_one_hot(y, C):
     return np.eye(C)[y.reshape(-1)].T
 class Data(object):
@@ -252,11 +253,9 @@ class seq2seq(object):
                 encoder_states = [state_h, state_c]
 
             decoder_inputs = Input(shape=(None,), name='decoder_input')
-
             decoder_state_input_h = Input(shape=(self.hidden,),name='decoder_state_input_h')
             decoder_state_input_c = Input(shape=(self.hidden,),name='decoder_state_input_c')
             decoder_states_inputs = [decoder_state_input_h, decoder_state_input_c]
-
             decoder_embed = shared_embedding_layer(decoder_inputs)
 
             def decoder_lstm_function(is_training):
@@ -313,20 +312,20 @@ class seq2seq(object):
                 if vis:
                     plot_model(encoder_model,'pngs/encoder_model.png')
                     plot_model(decoder_model,'pngs/decoder_model.png')
-                return (encoder_model, decoder_model)
+                return encoder_model, decoder_model
         else:
-            encoder_inputs = Input(batch_shape=(batch_size,context_line_num,context_max_len,), name='encoder_input')
+            encoder_inputs = Input(shape=(context_line_num,context_max_len,), name='encoder_input')
             shared_embedding_layer = Embedding(max_vocab_len, self.hidden, name='shared_embedding')
             encoder_embed = shared_embedding_layer(encoder_inputs)
             encoder_hidden_states=Lambda(self.slice_repeat,
                                          arguments={'context_line_num':context_line_num,'depth':depth[0],'dropout':dropout},
                                          name='encoder_lambda')(encoder_embed)
-            decoder_inputs = Input(batch_shape=(batch_size,response_max_num,), name='decoder_input')
-            decoder_state_input_h = Input(batch_shape=(batch_size,context_line_num*depth[0],self.hidden,), name='decoder_state_input_h')
+            decoder_inputs = Input(shape=(response_max_num,), name='decoder_input')
+            decoder_state_input_h = Input(shape=(context_line_num*depth[0],self.hidden,), name='decoder_state_input_h')
 
             decoder_embed = shared_embedding_layer(decoder_inputs)
 
-            context_lstm=LSTM(self.hidden,return_state=True)
+            context_lstm=LSTM(self.hidden,return_state=True,name='context_lstm')
             if is_training == True:
                 context_ouputs, context_h, context_c = context_lstm(encoder_hidden_states)
             else:
@@ -353,7 +352,7 @@ class seq2seq(object):
             decoder_outputs = decoder_lstm_function(is_training=True)
             decoder_dense = Dense(max_vocab_len, activation='softmax', name='softmax_vocab_len')
             decoder_softmax = decoder_dense(decoder_outputs)
-            decoder_target = Input(batch_shape=(batch_size, response_max_num), name='decoder_target')
+            decoder_target = Input(shape=(response_max_num), name='decoder_target')
             nllloss = Lambda(function=self.nllloss, name='nllloss', arguments={'max_vocab_len': max_vocab_len})(
                 [decoder_softmax, decoder_target])
 
@@ -375,17 +374,35 @@ class seq2seq(object):
                 if vis:
                     plot_model(encoder_model,'pngs/hierarchical_encoder_model.png')
                     plot_model(decoder_model,'pngs/hierarchical_decoder_model.png')
-                return (encoder_model)
+                return encoder_model,decoder_model
 
 
-    def train(self,batch_size,train_data_path='../Data/train_3.txt',split_ratio=0.1,
-              union=False,hierarchical=False,depth=1,dropout=0.0,attention=False):
+    def train(self,batch_size,train_data_path='../Data/train_3.txt',
+              split_ratio=0.1,valid_data_path='../Data/valid_3.txt',predict_model_path=None,
+              union=False,hierarchical=False,depth=1,dropout=0.0,attention=False,mode=1):
+        """
+
+        :param batch_size:
+        :param train_data_path:
+        :param split_ratio:
+        :param union:
+        :param hierarchical:
+        :param depth:
+        :param dropout:
+        :param attention:
+        :param mode: 1 denotes train mode and others means prediction mode
+        :return:
+        """
+
         if hierarchical:
             union=True
         data=Data(train_data_path=train_data_path,batch_size=batch_size,
                     split_ratio=split_ratio,union=union)
         if union==False:
             model = self.build_network(max_vocab_len=data.max_vocab_len, is_training=True,
+                                       hierarchical=hierarchical,
+                                       depth=depth,dropout=dropout,attention=attention)
+            encoder_model,decoder_model=self.build_network(max_vocab_len=data.max_vocab_len, is_training=False,
                                        hierarchical=hierarchical,
                                        depth=depth,dropout=dropout,attention=attention)
             model.compile(
@@ -399,27 +416,85 @@ class seq2seq(object):
                                        context_line_num=max(data.samples_context_sentence_num),
                                        context_max_len=max(data.samples_context_maxlen_list),
                                        depth=depth,dropout=dropout,attention=attention)
+            encoder_model,decoder_model=self.build_network(max_vocab_len=data.max_vocab_len, is_training=False,
+                                       hierarchical=hierarchical,batch_size=batch_size,
+                                       response_max_num=max(data.samples_response_len),
+                                       context_line_num=max(data.samples_context_sentence_num),
+                                       context_max_len=max(data.samples_context_maxlen_list),
+                                       depth=depth,dropout=dropout,attention=attention)
             model.compile(
                 optimizer=Adam(lr=0.001),
                 loss={'nllloss': lambda y_true, y_pred: y_pred}
             )
         model_att='new_union' if union else 'new_multi-lines'+'_hier_' if hierarchical else '_unhier_'
-        model.fit_generator(
-            generator=data.generator(is_valid=False),
-            steps_per_epoch=data.steps_per_epoch,
-            validation_data=data.generator(is_valid=True),
-            validation_steps=data.valid_steps_per_epoch,
-            epochs=100,
-            initial_epoch=0,
-            callbacks=[
-                TensorBoard('logs'),
-                ReduceLROnPlateau(patience=8,verbose=1,monitor='val_loss'),
-                EarlyStopping(monitor='val_loss',min_delta=1e-4,patience=28,verbose=1),
-                ModelCheckpoint(filepath='models/'+model_att+'seq2seq-{epoch:03d}--{val_loss:.5f}--{loss:.5f}.hdf5',
-                                save_best_only=False,save_weights_only=False,period=4,verbose=1)
-            ]
-        )
+        if mode==1:
+            model.fit_generator(
+                generator=data.generator(is_valid=False),
+                steps_per_epoch=data.steps_per_epoch,
+                validation_data=data.generator(is_valid=True),
+                validation_steps=data.valid_steps_per_epoch,
+                epochs=100,
+                initial_epoch=0,
+                callbacks=[
+                    TensorBoard('logs'),
+                    ReduceLROnPlateau(patience=8, verbose=1, monitor='val_loss'),
+                    EarlyStopping(monitor='val_loss', min_delta=1e-4, patience=28, verbose=1),
+                    ModelCheckpoint(
+                        filepath='models/' + model_att + 'seq2seq-{epoch:03d}--{val_loss:.5f}--{loss:.5f}.hdf5',
+                        save_best_only=False, save_weights_only=False, period=4, verbose=1)
+                ]
+            )
+        else:
+            if predict_model_path==None:
+                raise EnvironmentError('please set the predict_model_path')
+            elif valid_data_path==None:
+                raise EnvironmentError('please set the valid_data_path')
+            else:
+                print('loading the models...')
+                encoder_model.load_weights(predict_model_path,by_name=True)
+                decoder_model.load_weights(predict_model_path,by_name=True)
+                print('finished!')
+                id2word={i:word for word,i in data.dict.items() }
+                valid_data=open(valid_data_path,'r',encoding='utf-8').readlines()
+                for index in range(len(valid_data)):
+                    batch_valid_data=valid_data[index]
+                    batch_encoder_input=np.zeros(shape=(1,max(data.samples_context_sentence_num),
+                                                        max(data.samples_context_maxlen_list)))
+                    #max(data.samples_response_len)
+                    batch_decoder_input=np.zeros(shape=(1,max(data.samples_response_len)))
+                    ground_truths=[]
+                    contexts=[]
+                    generated_responses=[]
+                    for i,sample in enumerate(batch_valid_data):
+                        temp=sample.split('\t')
+                        context=temp[0].split('<eou>')
+                        contexts.append('\n'.join(context))
+                        ground_truths.append(temp[1])
+                        for line,sentence in enumerate(context):
+                            if line<max(data.samples_context_sentence_num):
+                                words=sentence.split(' ')
+                                for z,word in enumerate(words):
+                                    if z<max(data.samples_context_maxlen_list):
+                                        try:
+                                            batch_encoder_input[i, line, z] = data.dict[word]
+                                        except:
+                                            batch_encoder_input[i, line, z] = 0
+                    encoder_states=encoder_model.predict(batch_encoder_input)
+                    batch_decoder_input[:,:]=data.dict['\t']
+                    stop_condition = False
+                    decoded_sentence = ''
+                    while not stop_condition:
+                        output_tokens, h, c = decoder_model.predict(
+                            [batch_decoder_input] + [encoder_states])
+                        sampled_token_index = np.argmax(output_tokens[:, 0, :],axis=-1)
+                        print(sampled_token_index)
+                        break
+                        # decoder_word=id2word[sampled_token_index]
+                    break
+
+
 if __name__=='__main__':
     app=seq2seq(hidden=256)
-    app.train(batch_size=16,train_data_path='../Data/valid_3.txt',union=True,hierarchical=True,
-              depth=2,dropout=0.3)
+    app.train(batch_size=16,train_data_path='../Data/train_3.txt',union=True,hierarchical=True,
+              depth=2,dropout=0.3,mode=2,predict_model_path='models/new_unionseq2seq-008--0.94552--0.90485.hdf5',
+              valid_data_path='../Data/valid_3.txt')
