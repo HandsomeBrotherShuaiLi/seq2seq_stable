@@ -180,7 +180,6 @@ class seq2seq(object):
                         print(e)
                         break
         encoder_hidden_states = K.concatenate(encoder_hidden_states,axis=1)
-        print(encoder_hidden_states.get_shape())
         return encoder_hidden_states
 
     def build_network(self,max_vocab_len,is_training=True,hierarchical=False,
@@ -386,7 +385,8 @@ class seq2seq(object):
             model.compile(
                 optimizer=Adam(lr=0.001),
                 loss={'nllloss': lambda y_true, y_pred: y_pred})
-        model_att='new_union' if union else 'new_multi-lines'+'_hier_' if hierarchical else '_unhier_'
+        model_att='union' if union else 'new_multi-lines'
+        model_att+='_hier_' if hierarchical else '_unhier_'
         if mode==1:
             model.fit_generator(
                 generator=data.generator(is_valid=False),
@@ -417,43 +417,46 @@ class seq2seq(object):
                 id2word={i:word for word,i in data.dict.items() }
                 valid_data=open(valid_data_path,'r',encoding='utf-8').readlines()
                 for index in range(len(valid_data)):
-                    batch_valid_data=valid_data[index]
-                    batch_encoder_input=np.zeros(shape=(1,max(data.samples_context_sentence_num),
-                                                        max(data.samples_context_maxlen_list)))
-                    #max(data.samples_response_len)
-                    batch_decoder_input=np.zeros(shape=(1,max(data.samples_response_len)))
-                    ground_truths=[]
-                    contexts=[]
-                    generated_responses=[]
-                    for i,sample in enumerate(batch_valid_data):
-                        temp=sample.split('\t')
-                        context=temp[0].split('<eou>')
-                        contexts.append('\n'.join(context))
-                        # ground_truths.append(temp[1])
-                        for line,sentence in enumerate(context):
-                            if line<max(data.samples_context_sentence_num):
-                                words=sentence.split(' ')
-                                for z,word in enumerate(words):
-                                    if z<max(data.samples_context_maxlen_list):
-                                        try:
-                                            batch_encoder_input[i, line, z] = data.dict[word]
-                                        except:
-                                            batch_encoder_input[i, line, z] = data.dict['<unk>']
-                    encoder_states=encoder_model.predict(batch_encoder_input)
-                    batch_decoder_input[0,0]=data.dict['\t']
+                    sample=valid_data[index]
+                    temp=sample.split('\t')
+                    context=temp[0].split('<eou>')
+                    gt=temp[1]
+                    maxlen=max([len(i.split(' ')) for i in context])
+                    line_array=np.zeros(shape=(max(data.samples_context_sentence_num),maxlen,))
+                    for i,line in enumerate(context):
+                        if i<max(data.samples_context_sentence_num):
+                            words=line.split(' ')
+                            for j in range(len(words)):
+                                try:
+                                    line_array[i,j]=data.dict[words[j]]
+                                except:
+                                    line_array[i,j]=data.dict['<unk>']
+                        else:
+                            break
+                    line_array=np.expand_dims(line_array,axis=0)
+                    encoder_states=encoder_model.predict(line_array)
+                    decoder_inputs=np.zeros(shape=(1,1))
+                    decoder_inputs[0,0]=data.dict['\t']
                     stop_condition = False
                     decoded_sentence = ''
                     while not stop_condition:
                         output_tokens, h, c = decoder_model.predict(
-                            [batch_decoder_input] + [encoder_states])
-                        sampled_token_index = np.argmax(output_tokens[:, 0, :],axis=-1)
-                        print(sampled_token_index)
-                        break
-                        # decoder_word=id2word[sampled_token_index]
-                    break
+                            [decoder_inputs] + [encoder_states])
+                        sampled_token_index = np.argmax(output_tokens[0, -1, :],axis=-1)
+                        decoder_char=id2word[sampled_token_index]
+                        decoded_sentence+=decoder_char+' '
+                        if decoder_char=='\n' or len(decoded_sentence.split(' '))>max(data.samples_response_len):
+                            stop_condition=True
+                        encoder_states=h
+                        decoder_inputs[0,0]=sampled_token_index
+                    print('\n'.join(context))
+                    print('gt:{}'.format(gt))
+                    print('generation:{}'.format(decoded_sentence))
+                    print('*'*100)
 
 if __name__=='__main__':
+    #'/kaggle/input/train_3.txt'
     app=seq2seq(hidden=256)
-    app.train(batch_size=2,train_data_path='../Data/train_3.txt',union=False,hierarchical=True,
-              depth=2,dropout=0.3,mode=1,predict_model_path='models/nonebatch_unionseq2seq-004--0.99970--1.00288.hdf5',
+    app.train(batch_size=32,train_data_path='../Data/train_3.txt',union=True,hierarchical=True,
+              depth=2,dropout=0.4,mode=2,predict_model_path='models/union_hier_seq2seq-049--1.41146--1.36877.hdf5',
               valid_data_path='../Data/valid_3.txt')
